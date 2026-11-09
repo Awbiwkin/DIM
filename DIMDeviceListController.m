@@ -6,19 +6,14 @@
 
 static NSString * const DIMDomain = @"com.dim.manager";
 
-#pragma mark - Search Picker
-
 @interface DIMPickerController : UITableViewController <UISearchBarDelegate>
-
 @property (nonatomic, strong) NSArray<NSDictionary *> *items;
+@property (nonatomic, strong) NSArray<NSDictionary *> *filteredItems;
 @property (nonatomic, copy) NSString *pickerTitle;
 @property (nonatomic, copy) NSString *displayKey;
 @property (nonatomic, copy) NSString *valueKey;
-@property (nonatomic, copy) void (^selectionHandler)(NSDictionary *item);
-
+@property (nonatomic, copy) void (^selectionHandler)(NSDictionary *);
 @property (nonatomic, strong) UISearchBar *searchBar;
-@property (nonatomic, strong) NSArray<NSDictionary *> *filteredItems;
-
 @end
 
 @implementation DIMPickerController
@@ -32,41 +27,44 @@ static NSString * const DIMDomain = @"com.dim.manager";
     self.searchBar = [[UISearchBar alloc] init];
     self.searchBar.delegate = self;
     self.searchBar.placeholder = @"Search";
-    self.tableView.tableHeaderView = self.searchBar;
+    self.searchBar.autocorrectionType = UITextAutocorrectionTypeNo;
+    self.searchBar.autocapitalizationType = UITextAutocapitalizationTypeNone;
 
+    self.tableView.tableHeaderView = self.searchBar;
     self.filteredItems = self.items ?: @[];
 
-    [self.tableView registerClass:[UITableViewCell class]
+    [self.tableView registerClass:UITableViewCell.class
            forCellReuseIdentifier:@"DIMPickerCell"];
 }
 
-- (void)searchBar:(UISearchBar *)searchBar
-textDidChange:(NSString *)searchText {
-
-    if (searchText.length == 0) {
-        self.filteredItems = self.items;
+- (void)searchBar:(UISearchBar *)searchBar textDidChange:(NSString *)text {
+    if (!text.length) {
+        self.filteredItems = self.items ?: @[];
     } else {
         NSPredicate *predicate =
-        [NSPredicate predicateWithBlock:^BOOL(NSDictionary *item,
-                                              NSDictionary *bindings) {
-
-            NSString *title = item[self.displayKey] ?: @"";
+        [NSPredicate predicateWithBlock:^BOOL(NSDictionary *item, NSDictionary *bindings) {
+            NSString *name = item[self.displayKey] ?: @"";
             NSString *value = item[self.valueKey] ?: @"";
+            NSString *build = item[@"build"] ?: @"";
 
-            return [title localizedCaseInsensitiveContainsString:searchText] ||
-                   [value localizedCaseInsensitiveContainsString:searchText];
+            return [name localizedCaseInsensitiveContainsString:text] ||
+                   [value localizedCaseInsensitiveContainsString:text] ||
+                   [build localizedCaseInsensitiveContainsString:text];
         }];
 
-        self.filteredItems =
-        [self.items filteredArrayUsingPredicate:predicate];
+        self.filteredItems = [self.items filteredArrayUsingPredicate:predicate];
     }
 
     [self.tableView reloadData];
 }
 
-- (NSInteger)tableView:(UITableView *)tableView
- numberOfRowsInSection:(NSInteger)section {
+- (NSInteger)tableView:(UITableView *)tableView numberOfRowsInSection:(NSInteger)section {
     return self.filteredItems.count;
+}
+
+- (NSString *)tableView:(UITableView *)tableView titleForHeaderInSection:(NSInteger)section {
+    return [NSString stringWithFormat:@"%lu results",
+            (unsigned long)self.filteredItems.count];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
@@ -77,10 +75,17 @@ textDidChange:(NSString *)searchText {
                                     forIndexPath:indexPath];
 
     NSDictionary *item = self.filteredItems[indexPath.row];
-
     cell.textLabel.text = item[self.displayKey];
     cell.textLabel.numberOfLines = 2;
-    cell.accessoryType = UITableViewCellAccessoryNone;
+
+    if ([item[@"is_beta"] boolValue]) {
+        cell.textLabel.textColor = UIColor.systemOrangeColor;
+    } else if ([item[@"compatible"] respondsToSelector:@selector(boolValue)] &&
+               ![item[@"compatible"] boolValue]) {
+        cell.textLabel.textColor = UIColor.secondaryLabelColor;
+    } else {
+        cell.textLabel.textColor = UIColor.labelColor;
+    }
 
     return cell;
 }
@@ -100,15 +105,11 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 
 @end
 
-#pragma mark - DIM Device Controller
-
 @interface DIMDeviceListController : PSListController
-
 - (void)refreshCatalog;
 - (void)openFamilyPicker;
 - (void)openDevicePicker;
 - (void)openFirmwarePicker;
-
 @end
 
 @implementation DIMDeviceListController
@@ -127,6 +128,84 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 - (void)viewWillAppear:(BOOL)animated {
     [super viewWillAppear:animated];
     [self reloadDIMInterface];
+}
+
+#pragma mark - Current Device
+
+- (NSString *)currentDeviceName {
+    NSString *identifier = [DIMCatalogManager currentDeviceIdentifier];
+
+    NSDictionary *device =
+    [[DIMCatalogManager sharedManager] deviceForIdentifier:identifier];
+
+    if ([device[@"name"] isKindOfClass:NSString.class]) {
+        return device[@"name"];
+    }
+
+    if ([identifier isEqualToString:@"iPhone8,1"]) return @"iPhone 6s";
+    if ([identifier isEqualToString:@"iPhone8,2"]) return @"iPhone 6s Plus";
+
+    return identifier.length ? identifier : @"Unknown Device";
+}
+
+- (NSString *)selectedFamily {
+    NSString *family = [[self prefs] stringForKey:@"DeviceFamily"];
+
+    if (!family.length) {
+        family = [DIMCatalogManager currentDeviceFamily];
+        [[self prefs] setObject:family forKey:@"DeviceFamily"];
+    }
+
+    return family;
+}
+
+- (NSString *)selectedModel {
+    NSString *model = [[self prefs] stringForKey:@"SelectedModel"];
+
+    if (model.length) return model;
+
+    if ([[self selectedFamily] isEqualToString:
+         [DIMCatalogManager currentDeviceFamily]]) {
+
+        model = [DIMCatalogManager currentDeviceIdentifier];
+
+        if (model.length) {
+            [[self prefs] setObject:model forKey:@"SelectedModel"];
+            return model;
+        }
+    }
+
+    return @"";
+}
+
+- (NSDictionary *)selectedDevice {
+    NSString *identifier = [self selectedModel];
+    if (!identifier.length) return nil;
+
+    return [[DIMCatalogManager sharedManager] deviceForIdentifier:identifier];
+}
+
+- (NSString *)selectedDeviceName {
+    NSString *name = [self selectedDevice][@"name"];
+    if (name.length) return name;
+
+    NSString *identifier = [self selectedModel];
+    return identifier.length ? identifier : @"Not selected";
+}
+
+- (NSString *)boardConfiguration {
+    NSString *board = [self selectedDevice][@"boardconfig"];
+    return board.length ? board : @"Not available";
+}
+
+- (NSString *)modelNumbers {
+    id models = [self selectedDevice][@"models"];
+
+    if ([models isKindOfClass:NSArray.class] && [models count] > 0) {
+        return [models componentsJoinedByString:@", "];
+    }
+
+    return @"Not available";
 }
 
 #pragma mark - Specifier Helpers
@@ -151,9 +230,7 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
                                              edit:nil];
 }
 
-- (PSSpecifier *)makeButton:(NSString *)title
-                     action:(SEL)action {
-
+- (PSSpecifier *)makeButton:(NSString *)title action:(SEL)action {
     PSSpecifier *specifier =
     [PSSpecifier preferenceSpecifierNamed:title
                                     target:self
@@ -169,105 +246,58 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     return specifier;
 }
 
-#pragma mark - Current Device
+- (PSSpecifier *)makeSwitch:(NSString *)title
+                        key:(NSString *)key
+              defaultValue:(BOOL)defaultValue {
 
-- (NSString *)currentDeviceName {
-    NSString *identifier =
-    [DIMCatalogManager currentDeviceIdentifier];
+    PSSpecifier *specifier =
+    [PSSpecifier preferenceSpecifierNamed:title
+                                    target:self
+                                       set:@selector(setPreferenceValue:specifier:)
+                                       get:@selector(readPreferenceValue:)
+                                    detail:nil
+                                      cell:PSSwitchCell
+                                      edit:nil];
 
-    NSDictionary *device =
-    [[DIMCatalogManager sharedManager] deviceForIdentifier:identifier];
+    [specifier setProperty:key forKey:@"key"];
+    [specifier setProperty:DIMDomain forKey:@"defaults"];
+    [specifier setProperty:@(defaultValue) forKey:@"default"];
 
-    if (device[@"name"]) {
-        return device[@"name"];
-    }
-
-    if ([identifier isEqualToString:@"iPhone8,1"]) {
-        return @"iPhone 6s";
-    }
-
-    return identifier.length > 0 ? identifier : @"Unknown Device";
+    return specifier;
 }
 
-- (NSString *)selectedDeviceName {
-    NSString *identifier =
-    [[self prefs] stringForKey:@"SelectedModel"];
-
-    NSDictionary *device =
-    [[DIMCatalogManager sharedManager] deviceForIdentifier:identifier];
-
-    if (device[@"name"]) {
-        return device[@"name"];
-    }
-
-    return identifier ?: @"Not selected";
-}
-
-- (NSString *)selectedFamily {
-    NSString *family =
-    [[self prefs] stringForKey:@"DeviceFamily"];
-
-    if (!family) {
-        family = [DIMCatalogManager currentDeviceFamily];
-        [[self prefs] setObject:family forKey:@"DeviceFamily"];
-    }
-
-    return family;
-}
-
-- (NSString *)selectedModel {
-    NSUserDefaults *prefs = [self prefs];
-
-    NSString *model = [prefs stringForKey:@"SelectedModel"];
-
-    if (!model.length) {
-        model = [DIMCatalogManager currentDeviceIdentifier];
-
-        if (model.length) {
-            [prefs setObject:model forKey:@"SelectedModel"];
-        }
-    }
-
-    return model ?: @"";
-}
-
-#pragma mark - Date
-
-- (NSString *)formattedUpdateDate {
-    NSDate *date =
-    [[DIMCatalogManager sharedManager] lastUpdateDate];
-
-    if (![date isKindOfClass:[NSDate class]]) {
-        return @"Never";
-    }
-
-    NSDateFormatter *formatter =
-    [[NSDateFormatter alloc] init];
-
-    formatter.dateStyle = NSDateFormatterMediumStyle;
-    formatter.timeStyle = NSDateFormatterShortStyle;
-
-    return [formatter stringFromDate:date];
-}
-
-#pragma mark - Picker
+#pragma mark - Picker Navigation
 
 - (void)presentPickerWithTitle:(NSString *)title
                          items:(NSArray<NSDictionary *> *)items
-                     displayKey:(NSString *)displayKey
-                       valueKey:(NSString *)valueKey
-                       selected:(void (^)(NSDictionary *item))selection {
+                    displayKey:(NSString *)displayKey
+                      valueKey:(NSString *)valueKey
+                      selected:(void (^)(NSDictionary *))selection {
 
     DIMPickerController *picker =
     [[DIMPickerController alloc] initWithStyle:UITableViewStyleInsetGrouped];
 
     picker.pickerTitle = title;
-    picker.items = items;
+    picker.items = items ?: @[];
     picker.displayKey = displayKey;
     picker.valueKey = valueKey;
     picker.selectionHandler = selection;
 
     [self.navigationController pushViewController:picker animated:YES];
+}
+
+- (void)showMessage:(NSString *)message title:(NSString *)title {
+    UIAlertController *alert =
+    [UIAlertController alertControllerWithTitle:title
+                                        message:message
+                                 preferredStyle:UIAlertControllerStyleAlert];
+
+    [alert addAction:
+     [UIAlertAction actionWithTitle:@"OK"
+                              style:UIAlertActionStyleDefault
+                            handler:nil]];
+
+    [self presentViewController:alert animated:YES completion:nil];
 }
 
 #pragma mark - Family Picker
@@ -282,34 +312,18 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 
     [self presentPickerWithTitle:@"Device Family"
                            items:families
-                       displayKey:@"name"
-                         valueKey:@"value"
-                         selected:^(NSDictionary *item) {
+                      displayKey:@"name"
+                        valueKey:@"value"
+                        selected:^(NSDictionary *item) {
 
         __strong typeof(weakSelf) self = weakSelf;
         if (!self) return;
 
         NSString *family = item[@"value"];
-
         [[self prefs] setObject:family forKey:@"DeviceFamily"];
 
-        NSArray *devices =
-        [[DIMCatalogManager sharedManager] devicesForFamily:family];
-
-        NSString *currentIdentifier =
-        [DIMCatalogManager currentDeviceIdentifier];
-
-        BOOL currentExists = NO;
-
-        for (NSDictionary *device in devices) {
-            if ([device[@"identifier"] isEqualToString:currentIdentifier]) {
-                currentExists = YES;
-                break;
-            }
-        }
-
-        if (currentExists) {
-            [[self prefs] setObject:currentIdentifier
+        if ([[DIMCatalogManager currentDeviceFamily] isEqualToString:family]) {
+            [[self prefs] setObject:[DIMCatalogManager currentDeviceIdentifier]
                              forKey:@"SelectedModel"];
         } else {
             [[self prefs] removeObjectForKey:@"SelectedModel"];
@@ -325,10 +339,8 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 #pragma mark - Device Picker
 
 - (void)openDevicePicker {
-    NSString *family = [self selectedFamily];
-
     NSArray *devices =
-    [[DIMCatalogManager sharedManager] devicesForFamily:family];
+    [[DIMCatalogManager sharedManager] devicesForFamily:[self selectedFamily]];
 
     NSMutableArray *items = [NSMutableArray array];
 
@@ -336,13 +348,13 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
         NSString *name = device[@"name"];
         NSString *identifier = device[@"identifier"];
 
-        if (!name || !identifier) continue;
+        if (!name.length || !identifier.length) continue;
 
-        NSString *display =
-        [NSString stringWithFormat:@"%@ (%@)", name, identifier];
+        NSString *board = device[@"boardconfig"] ?: @"Board unknown";
 
         [items addObject:@{
-            @"name": display,
+            @"name": [NSString stringWithFormat:@"%@ (%@) · %@",
+                      name, identifier, board],
             @"value": identifier
         }];
     }
@@ -351,18 +363,16 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 
     [self presentPickerWithTitle:@"Select Device"
                            items:items
-                       displayKey:@"name"
-                         valueKey:@"value"
-                         selected:^(NSDictionary *item) {
+                      displayKey:@"name"
+                        valueKey:@"value"
+                        selected:^(NSDictionary *item) {
 
         __strong typeof(weakSelf) self = weakSelf;
         if (!self) return;
 
         NSString *identifier = item[@"value"];
 
-        [[self prefs] setObject:identifier
-                         forKey:@"SelectedModel"];
-
+        [[self prefs] setObject:identifier forKey:@"SelectedModel"];
         [[self prefs] removeObjectForKey:@"SelectedVersion"];
         [[self prefs] removeObjectForKey:@"SelectedBuild"];
 
@@ -371,7 +381,6 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
         [[DIMCatalogManager sharedManager]
          refreshFirmwaresForDevice:identifier
          completion:^(BOOL success, NSString *message) {
-
             [self reloadDIMInterface];
         }];
     }];
@@ -382,43 +391,85 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 - (void)openFirmwarePicker {
     NSString *identifier = [self selectedModel];
 
-    NSArray *firmwares =
-    [[DIMCatalogManager sharedManager] firmwaresForDevice:identifier];
+    if (!identifier.length) {
+        [self showMessage:@"Select a device first." title:@"No Device"];
+        return;
+    }
+
+    BOOL showBetas = [[self prefs] boolForKey:@"ShowBetaBuilds"];
+    BOOL allowIncompatible =
+    [[self prefs] boolForKey:@"NonStandardCombinations"];
+
+    NSArray *builds =
+    [[DIMCatalogManager sharedManager]
+     buildsForDevice:identifier
+     includeBetas:showBetas
+     allowIncompatible:allowIncompatible];
 
     NSMutableArray *items = [NSMutableArray array];
 
-    for (NSDictionary *firmware in firmwares) {
+    for (NSDictionary *firmware in builds) {
         NSString *version = firmware[@"version"];
         NSString *build = firmware[@"build"];
 
-        if (!version || !build) continue;
+        if (!version.length || !build.length) continue;
 
-        NSString *display =
-        [NSString stringWithFormat:@"%@ (%@)", version, build];
+        NSMutableArray *labels = [NSMutableArray array];
 
-        [items addObject:@{
-            @"name": display,
-            @"value": version,
-            @"build": build
-        }];
+        if ([firmware[@"is_beta"] boolValue]) {
+            [labels addObject:@"BETA"];
+        }
+
+        if (![firmware[@"compatible"] boolValue]) {
+            [labels addObject:@"NON-STANDARD"];
+        }
+
+        if ([firmware[@"signed"] respondsToSelector:@selector(boolValue)]) {
+            [labels addObject:
+             ([firmware[@"signed"] boolValue] ? @"SIGNED" : @"UNSIGNED")];
+        }
+
+        NSString *suffix = labels.count
+        ? [NSString stringWithFormat:@" · %@",
+           [labels componentsJoinedByString:@" · "]]
+        : @"";
+
+        NSMutableDictionary *entry = [firmware mutableCopy];
+
+        entry[@"name"] =
+        [NSString stringWithFormat:@"%@ (%@)%@", version, build, suffix];
+
+        entry[@"value"] = version;
+
+        [items addObject:entry];
+    }
+
+    if (items.count == 0) {
+        [self showMessage:
+         @"No builds match the current filters. Enable beta builds or non-standard combinations, or refresh the catalog."
+                    title:@"No Builds"];
+        return;
     }
 
     __weak typeof(self) weakSelf = self;
 
-    [self presentPickerWithTitle:@"Select iOS Build"
+    [self presentPickerWithTitle:@"Select iOS / iPadOS Build"
                            items:items
-                       displayKey:@"name"
-                         valueKey:@"value"
-                         selected:^(NSDictionary *item) {
+                      displayKey:@"name"
+                        valueKey:@"value"
+                        selected:^(NSDictionary *item) {
 
         __strong typeof(weakSelf) self = weakSelf;
         if (!self) return;
 
-        [[self prefs] setObject:item[@"value"]
-                         forKey:@"SelectedVersion"];
+        [[self prefs] setObject:item[@"value"] forKey:@"SelectedVersion"];
+        [[self prefs] setObject:item[@"build"] forKey:@"SelectedBuild"];
 
-        [[self prefs] setObject:item[@"build"]
-                         forKey:@"SelectedBuild"];
+        [[self prefs] setObject:item[@"is_beta"] ?: @NO
+                         forKey:@"SelectedBuildIsBeta"];
+
+        [[self prefs] setObject:item[@"compatible"] ?: @NO
+                         forKey:@"SelectedBuildCompatible"];
 
         [self reloadDIMInterface];
     }];
@@ -426,10 +477,22 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 
 #pragma mark - Refresh
 
+- (NSString *)formattedUpdateDate {
+    NSDate *date = [[DIMCatalogManager sharedManager] lastUpdateDate];
+
+    if (![date isKindOfClass:NSDate.class]) return @"Never";
+
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    formatter.dateStyle = NSDateFormatterMediumStyle;
+    formatter.timeStyle = NSDateFormatterShortStyle;
+
+    return [formatter stringFromDate:date];
+}
+
 - (void)refreshCatalog {
     UIAlertController *loading =
     [UIAlertController alertControllerWithTitle:@"Updating Catalog"
-                                        message:@"Loading device and OS databases..."
+                                        message:@"Loading IPSW.info and AppleDB databases..."
                                  preferredStyle:UIAlertControllerStyleAlert];
 
     [self presentViewController:loading animated:YES completion:nil];
@@ -437,79 +500,91 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [[DIMCatalogManager sharedManager]
      refreshCatalogWithCompletion:^(BOOL success, NSString *message) {
 
-        [loading dismissViewControllerAnimated:YES completion:^{
+        NSString *selectedModel = [self selectedModel];
 
-            [self reloadDIMInterface];
+        void (^finish)(NSString *) = ^(NSString *firmwareMessage) {
+            [loading dismissViewControllerAnimated:YES completion:^{
 
-            UIAlertController *result =
-            [UIAlertController alertControllerWithTitle:
-             (success ? @"Catalog Updated" : @"Update Failed")
-                                                 message:message
-                                          preferredStyle:UIAlertControllerStyleAlert];
+                [self reloadDIMInterface];
 
-            [result addAction:
-             [UIAlertAction actionWithTitle:@"OK"
-                                      style:UIAlertActionStyleDefault
-                                    handler:nil]];
+                NSString *fullMessage = message ?: @"Catalog refresh finished.";
 
-            [self presentViewController:result animated:YES completion:nil];
-        }];
+                if (firmwareMessage.length) {
+                    fullMessage = [fullMessage stringByAppendingFormat:
+                                   @"\n\n%@", firmwareMessage];
+                }
+
+                [self showMessage:fullMessage
+                            title:(success ? @"Catalog Updated" : @"Catalog Update")];
+            }];
+        };
+
+        if (success && selectedModel.length) {
+            [[DIMCatalogManager sharedManager]
+             refreshFirmwaresForDevice:selectedModel
+             completion:^(BOOL firmwareSuccess, NSString *firmwareMessage) {
+                finish(firmwareMessage);
+            }];
+        } else {
+            finish(nil);
+        }
     }];
 }
 
-#pragma mark - Build Interface
+#pragma mark - Interface
 
 - (NSArray *)specifiers {
-    if (_specifiers) {
-        return _specifiers;
-    }
+    if (_specifiers) return _specifiers;
 
     NSMutableArray *items = [NSMutableArray array];
 
-    DIMCatalogManager *catalog =
-    [DIMCatalogManager sharedManager];
-
+    DIMCatalogManager *catalog = [DIMCatalogManager sharedManager];
     NSUserDefaults *prefs = [self prefs];
 
     NSString *family = [self selectedFamily];
     NSString *model = [self selectedModel];
 
-    NSString *deviceName = [self currentDeviceName];
-    NSString *selectedName = [self selectedDeviceName];
-
-    // CURRENT DEVICE
+    NSDictionary *statistics = [catalog catalogStatistics];
 
     [items addObject:[self makeGroup:@"CURRENT DEVICE"]];
 
     [items addObject:
      [self makeStatus:
       [NSString stringWithFormat:@"%@ · %@",
-       deviceName,
+       [self currentDeviceName],
        [DIMCatalogManager currentDeviceIdentifier]]]];
-
-    // SELECTED CONFIGURATION
 
     [items addObject:[self makeGroup:@"SELECTED CONFIGURATION"]];
 
     [items addObject:
-     [self makeStatus:
-      [NSString stringWithFormat:@"Family: %@", family]]];
+     [self makeStatus:[NSString stringWithFormat:@"Family: %@", family]]];
 
     [items addObject:
      [self makeStatus:
-      [NSString stringWithFormat:@"Device: %@", selectedName]]];
+      [NSString stringWithFormat:@"Device: %@", [self selectedDeviceName]]]];
 
     [items addObject:
      [self makeStatus:
-      [NSString stringWithFormat:@"ProductType: %@", model]]];
+      [NSString stringWithFormat:@"ProductType: %@",
+       model.length ? model : @"Not selected"]]];
 
-    [items addObject:[self makeButton:@"Choose Device Family"
-                               action:@selector(openFamilyPicker)]];
+    [items addObject:
+     [self makeStatus:
+      [NSString stringWithFormat:@"BoardConfig: %@",
+       [self boardConfiguration]]]];
 
-    [items addObject:[self makeButton:@"Choose Device Model"
-                               action:@selector(openDevicePicker)]];
+    [items addObject:
+     [self makeStatus:
+      [NSString stringWithFormat:@"Model Number: %@",
+       [self modelNumbers]]]];
 
-    // OPERATING SYSTEM
+    [items addObject:
+     [self makeButton:@"Choose Device Family"
+               action:@selector(openFamilyPicker)]];
+
+    [items addObject:
+     [self makeButton:@"Choose Device Model"
+               action:@selector(openDevicePicker)]];
 
     [items addObject:[self makeGroup:@"OPERATING SYSTEM"]];
 
@@ -523,60 +598,63 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
      [self makeStatus:
       [NSString stringWithFormat:@"%@ · %@", version, build]]];
 
-    NSArray *firmwares =
-    [catalog firmwaresForDevice:model];
+    NSArray *available =
+    [catalog buildsForDevice:model
+                includeBetas:YES
+          allowIncompatible:YES];
+
+    NSUInteger betaCount = 0;
+    for (NSDictionary *entry in available) {
+        if ([entry[@"is_beta"] boolValue]) betaCount++;
+    }
 
     [items addObject:
      [self makeStatus:
-      [NSString stringWithFormat:@"Available builds: %lu",
-       (unsigned long)firmwares.count]]];
+      [NSString stringWithFormat:@"Available builds: %lu · Beta: %lu",
+       (unsigned long)available.count,
+       (unsigned long)betaCount]]];
+
+    [items addObject:
+     [self makeSwitch:@"Show Beta Builds"
+                  key:@"ShowBetaBuilds"
+          defaultValue:NO]];
 
     [items addObject:
      [self makeButton:@"Choose iOS / iPadOS Build"
                action:@selector(openFirmwarePicker)]];
 
-    if (firmwares.count == 0) {
-        [items addObject:
-         [self makeStatus:@"No firmware records in local cache."]];
-    }
-
-    // COMPATIBILITY
-
     [items addObject:[self makeGroup:@"COMPATIBILITY"]];
 
-    PSSpecifier *nonstandard =
-    [PSSpecifier preferenceSpecifierNamed:@"Non-standard combinations"
-                                    target:self
-                                       set:@selector(setPreferenceValue:specifier:)
-                                       get:@selector(readPreferenceValue:)
-                                    detail:nil
-                                      cell:PSSwitchCell
-                                      edit:nil];
-
-    [nonstandard setProperty:@"NonStandardCombinations" forKey:@"key"];
-    [nonstandard setProperty:DIMDomain forKey:@"defaults"];
-    [nonstandard setProperty:@NO forKey:@"default"];
-
-    [items addObject:nonstandard];
-
-    // CATALOG STATUS
+    [items addObject:
+     [self makeSwitch:@"Non-standard combinations"
+                  key:@"NonStandardCombinations"
+          defaultValue:NO]];
 
     [items addObject:[self makeGroup:@"CATALOG STATUS"]];
 
     [items addObject:
      [self makeStatus:
-      [NSString stringWithFormat:@"Devices: %lu",
-       (unsigned long)[[prefs arrayForKey:@"DIMCatalogDevices"] count]]]];
+      [NSString stringWithFormat:@"Devices: %@",
+       statistics[@"devices"] ?: @0]]];
+
+    [items addObject:
+     [self makeStatus:
+      [NSString stringWithFormat:@"iOS builds: %@ · Betas: %@",
+       statistics[@"ios"] ?: @0,
+       statistics[@"ios_beta"] ?: @0]]];
+
+    [items addObject:
+     [self makeStatus:
+      [NSString stringWithFormat:@"iPadOS builds: %@ · Betas: %@",
+       statistics[@"ipados"] ?: @0,
+       statistics[@"ipados_beta"] ?: @0]]];
 
     [items addObject:
      [self makeStatus:
       [NSString stringWithFormat:@"Last update: %@",
        [self formattedUpdateDate]]]];
 
-    [items addObject:
-     [self makeStatus:[catalog catalogStatus]]];
-
-    // REFRESH AT THE BOTTOM
+    [items addObject:[self makeStatus:[catalog catalogStatus]]];
 
     [items addObject:[self makeGroup:@""]];
 
@@ -585,11 +663,10 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
                action:@selector(refreshCatalog)]];
 
     _specifiers = [items copy];
-
     return _specifiers;
 }
 
-#pragma mark - Save Preferences
+#pragma mark - Save
 
 - (void)setPreferenceValue:(id)value specifier:(PSSpecifier *)specifier {
     [super setPreferenceValue:value specifier:specifier];
