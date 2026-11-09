@@ -1,27 +1,41 @@
 
+#import <UIKit/UIKit.h>
 #import <Preferences/PSListController.h>
 #import <Preferences/PSSpecifier.h>
 #import "DIMCatalogManager.h"
 
+static NSString * const DIMDomain = @"com.dim.manager";
+
 @interface DIMDeviceListController : PSListController
-- (void)refreshCatalog;
 @end
 
 @implementation DIMDeviceListController
 
-static NSString * const DIMDomain = @"com.dim.manager";
+#pragma mark - Preferences
 
 - (NSUserDefaults *)prefs {
     return [[NSUserDefaults alloc] initWithSuiteName:DIMDomain];
 }
 
-- (PSSpecifier *)group:(NSString *)name {
-    return [PSSpecifier preferenceSpecifierNamed:name
+#pragma mark - Specifier Helpers
+
+- (PSSpecifier *)makeGroup:(NSString *)title {
+    return [PSSpecifier preferenceSpecifierNamed:title
                                            target:nil
                                               set:nil
                                               get:nil
                                            detail:nil
                                              cell:PSGroupCell
+                                             edit:nil];
+}
+
+- (PSSpecifier *)makeStatus:(NSString *)title {
+    return [PSSpecifier preferenceSpecifierNamed:title
+                                           target:nil
+                                              set:nil
+                                              get:nil
+                                           detail:nil
+                                             cell:PSStaticTextCell
                                              edit:nil];
 }
 
@@ -49,224 +63,273 @@ static NSString * const DIMDomain = @"com.dim.manager";
     return specifier;
 }
 
-- (PSSpecifier *)statusSpecifier:(NSString *)text {
-    PSSpecifier *specifier =
-    [PSSpecifier preferenceSpecifierNamed:text
-                                    target:nil
+#pragma mark - Catalog
+
+- (NSString *)formattedUpdateDate {
+    NSDate *date = [[DIMCatalogManager sharedManager] lastUpdateDate];
+
+    if (!date) {
+        return @"Never updated";
+    }
+
+    NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
+    formatter.dateStyle = NSDateFormatterMediumStyle;
+    formatter.timeStyle = NSDateFormatterShortStyle;
+
+    return [formatter stringFromDate:date];
+}
+
+- (void)refreshCatalog {
+    UIAlertController *loading =
+    [UIAlertController alertControllerWithTitle:@"Updating Catalog"
+                                        message:@"Connecting to IPSW.info and AppleDB..."
+                                 preferredStyle:UIAlertControllerStyleAlert];
+
+    [self presentViewController:loading animated:YES completion:nil];
+
+    [[DIMCatalogManager sharedManager]
+     refreshCatalogWithCompletion:^(BOOL success, NSString *message) {
+
+        [loading dismissViewControllerAnimated:YES completion:^{
+
+            self->_specifiers = nil;
+            [self reloadSpecifiers];
+
+            UIAlertController *alert =
+            [UIAlertController alertControllerWithTitle:
+             (success ? @"Catalog Updated" : @"Update Failed")
+                                                 message:message
+                                          preferredStyle:UIAlertControllerStyleAlert];
+
+            [alert addAction:
+             [UIAlertAction actionWithTitle:@"OK"
+                                      style:UIAlertActionStyleDefault
+                                    handler:nil]];
+
+            [self presentViewController:alert animated:YES completion:nil];
+        }];
+    }];
+}
+
+#pragma mark - Build Interface
+
+- (NSArray *)specifiers {
+    if (_specifiers) {
+        return _specifiers;
+    }
+
+    NSMutableArray *items = [NSMutableArray array];
+
+    NSUserDefaults *prefs = [self prefs];
+    DIMCatalogManager *catalog = [DIMCatalogManager sharedManager];
+
+    NSString *family =
+    [prefs stringForKey:@"DeviceFamily"] ?: @"iPhone";
+
+    BOOL isIPad = [family isEqualToString:@"iPad"];
+
+    NSString *osFamily = isIPad ? @"iPadOS" : @"iOS";
+
+    // CATALOG
+
+    [items addObject:[self makeGroup:@"CATALOG"]];
+
+    PSSpecifier *refresh =
+    [PSSpecifier preferenceSpecifierNamed:@"Refresh Catalog"
+                                    target:self
                                        set:nil
                                        get:nil
                                     detail:nil
-                                      cell:PSStaticTextCell
+                                      cell:PSButtonCell
                                       edit:nil];
 
-    return specifier;
-}
+    [refresh setProperty:NSStringFromSelector(@selector(refreshCatalog))
+                  forKey:@"action"];
 
-- (NSArray *)specifiers {
-    if (!_specifiers) {
-        NSMutableArray *items = [NSMutableArray array];
+    [items addObject:refresh];
 
-        NSUserDefaults *prefs = [self prefs];
+    [items addObject:
+     [self makeStatus:
+      [NSString stringWithFormat:@"Last update: %@",
+       [self formattedUpdateDate]]]];
 
-        NSString *family =
-        [prefs stringForKey:@"DeviceFamily"] ?: @"iPhone";
+    [items addObject:[self makeStatus:[catalog catalogStatus]]];
 
-        BOOL isIPad = [family isEqualToString:@"iPad"];
+    // DEVICE FAMILY
 
-        NSString *osFamily = isIPad ? @"iPadOS" : @"iOS";
+    [items addObject:[self makeGroup:@"DEVICE FAMILY"]];
 
-        DIMCatalogManager *catalog =
-        [DIMCatalogManager sharedManager];
+    [items addObject:
+     [self makeList:@"Device Family"
+                key:@"DeviceFamily"
+             titles:@[@"iPhone", @"iPad"]
+             values:@[@"iPhone", @"iPad"]
+            default:@"iPhone"]];
 
-        [items addObject:[self group:@"CATALOG"]];
+    // DEVICE MODEL
 
-        PSSpecifier *refresh =
-        [PSSpecifier preferenceSpecifierNamed:@"Refresh Catalog"
-                                        target:self
-                                           set:nil
-                                           get:nil
-                                        detail:nil
-                                          cell:PSButtonCell
-                                          edit:nil];
+    [items addObject:[self makeGroup:@"DEVICE MODEL"]];
 
-        [refresh setProperty:NSStringFromSelector(@selector(refreshCatalog))
-                      forKey:@"action"];
+    NSArray *devices = [catalog devicesForFamily:family];
 
-        [items addObject:refresh];
+    NSMutableArray *deviceTitles = [NSMutableArray array];
+    NSMutableArray *deviceValues = [NSMutableArray array];
 
-        NSDate *lastUpdate = [catalog lastUpdateDate];
+    for (NSDictionary *device in devices) {
+        NSString *name = device[@"name"];
+        NSString *identifier = device[@"identifier"];
 
-        NSString *dateText = @"Never updated";
+        if (![name isKindOfClass:[NSString class]] ||
+            ![identifier isKindOfClass:[NSString class]]) {
+            continue;
+        }
 
-        if (lastUpdate) {
-            NSDateFormatter *formatter = [[NSDateFormatter alloc] init];
-            formatter.dateStyle = NSDateFormatterMediumStyle;
-            formatter.timeStyle = NSDateFormatterShortStyle;
+        [deviceTitles addObject:
+         [NSString stringWithFormat:@"%@ (%@)", name, identifier]];
 
-            dateText = [formatter stringFromDate:lastUpdate];
+        [deviceValues addObject:identifier];
+    }
+
+    NSString *selectedModel = [prefs stringForKey:@"SelectedModel"];
+
+    if (deviceValues.count > 0) {
+        if (![deviceValues containsObject:selectedModel]) {
+            selectedModel = deviceValues.firstObject;
         }
 
         [items addObject:
-         [self statusSpecifier:
-          [NSString stringWithFormat:@"Last update: %@", dateText]]];
-
-        [items addObject:
-         [self statusSpecifier:[catalog catalogStatus]]];
-
-        [items addObject:[self group:@"DEVICE FAMILY"]];
-
-        [items addObject:
-         [self makeList:@"Device Family"
-                    key:@"DeviceFamily"
-                 titles:@[@"iPhone", @"iPad"]
-                 values:@[@"iPhone", @"iPad"]
-                default:@"iPhone"]];
-
-        NSArray *devices = [catalog devicesForFamily:family];
-
-        NSMutableArray *deviceTitles = [NSMutableArray array];
-        NSMutableArray *deviceValues = [NSMutableArray array];
+         [self makeList:@"Device Model"
+                    key:@"SelectedModel"
+                 titles:deviceTitles
+                 values:deviceValues
+                default:selectedModel]];
 
         for (NSDictionary *device in devices) {
-            NSString *name = device[@"name"];
-            NSString *identifier = device[@"identifier"];
-
-            if (name && identifier) {
-                [deviceTitles addObject:
-                 [NSString stringWithFormat:@"%@ (%@)", name, identifier]];
-
-                [deviceValues addObject:identifier];
-            }
-        }
-
-        [items addObject:[self group:@"DEVICE MODEL"]];
-
-        if (deviceValues.count > 0) {
-            NSString *selectedModel =
-            [prefs stringForKey:@"SelectedModel"];
-
-            if (![deviceValues containsObject:selectedModel]) {
-                selectedModel = deviceValues.firstObject;
+            if (![device[@"identifier"] isEqualToString:selectedModel]) {
+                continue;
             }
 
             [items addObject:
-             [self makeList:@"Device Model"
-                        key:@"SelectedModel"
-                     titles:deviceTitles
-                     values:deviceValues
-                    default:selectedModel]];
+             [self makeStatus:
+              [NSString stringWithFormat:@"ProductType: %@",
+               device[@"identifier"]]]];
 
-            for (NSDictionary *device in devices) {
-                if ([device[@"identifier"] isEqualToString:selectedModel]) {
-                    [items addObject:
-                     [self statusSpecifier:
-                      [NSString stringWithFormat:@"ProductType: %@",
-                       device[@"identifier"]]]];
+            NSString *board = device[@"boardconfig"];
 
-                    if (device[@"boardconfig"]) {
-                        [items addObject:
-                         [self statusSpecifier:
-                          [NSString stringWithFormat:@"Board: %@",
-                           device[@"boardconfig"]]]];
-                    }
-
-                    if ([device[@"models"] isKindOfClass:[NSArray class]]) {
-                        NSString *models =
-                        [device[@"models"] componentsJoinedByString:@", "];
-
-                        [items addObject:
-                         [self statusSpecifier:
-                          [NSString stringWithFormat:@"Model numbers: %@",
-                           models]]];
-                    }
-
-                    break;
-                }
-            }
-        } else {
-            [items addObject:
-             [self statusSpecifier:
-              @"No cached devices. Tap Refresh Catalog."]];
-        }
-
-        [items addObject:[self group:@"OPERATING SYSTEM"]];
-
-        NSArray *versions = [catalog versionsForFamily:family];
-
-        NSMutableArray *versionTitles = [NSMutableArray array];
-        NSMutableArray *versionValues = [NSMutableArray array];
-
-        for (NSDictionary *version in versions) {
-            NSString *number = version[@"version"] ?: @"";
-            NSString *build = version[@"build"] ?: @"";
-
-            NSString *title = number;
-
-            if (build.length > 0) {
-                title = [NSString stringWithFormat:@"%@ (%@)", number, build];
+            if ([board isKindOfClass:[NSString class]] && board.length > 0) {
+                [items addObject:
+                 [self makeStatus:
+                  [NSString stringWithFormat:@"Board: %@", board]]];
             }
 
-            NSString *value =
-            [NSString stringWithFormat:@"%@|%@", number, build];
+            NSArray *models = device[@"models"];
 
-            [versionTitles addObject:title];
-            [versionValues addObject:value];
-        }
-
-        if (versionValues.count > 0) {
-            NSString *selectedVersion =
-            [prefs stringForKey:@"SelectedVersion"] ?: @"";
-
-            NSString *selectedBuild =
-            [prefs stringForKey:@"SelectedBuild"] ?: @"";
-
-            NSString *selectedValue =
-            [NSString stringWithFormat:@"%@|%@", selectedVersion, selectedBuild];
-
-            if (![versionValues containsObject:selectedValue]) {
-                selectedValue = versionValues.firstObject;
+            if ([models isKindOfClass:[NSArray class]] && models.count > 0) {
+                [items addObject:
+                 [self makeStatus:
+                  [NSString stringWithFormat:@"Model numbers: %@",
+                   [models componentsJoinedByString:@", "]]]];
             }
 
-            [items addObject:
-             [self makeList:@"Operating System"
-                        key:@"SelectedFirmware"
-                     titles:versionTitles
-                     values:versionValues
-                    default:selectedValue]];
-        } else {
-            [items addObject:
-             [self statusSpecifier:
-              [NSString stringWithFormat:
-               @"No cached %@ versions. Tap Refresh Catalog.",
-               osFamily]]];
+            break;
         }
 
-        [items addObject:[self group:@"COMPATIBILITY"]];
+    } else {
+        [items addObject:
+         [self makeStatus:@"No cached devices. Tap Refresh Catalog."]];
+    }
 
-        PSSpecifier *nonstandard =
-        [PSSpecifier preferenceSpecifierNamed:@"Non-standard combinations"
-                                        target:self
-                                           set:@selector(setPreferenceValue:specifier:)
-                                           get:@selector(readPreferenceValue:)
-                                        detail:nil
-                                          cell:PSSwitchCell
-                                          edit:nil];
+    // OPERATING SYSTEM
 
-        [nonstandard setProperty:@"NonStandardCombinations" forKey:@"key"];
-        [nonstandard setProperty:DIMDomain forKey:@"defaults"];
-        [nonstandard setProperty:@NO forKey:@"default"];
+    [items addObject:[self makeGroup:@"OPERATING SYSTEM"]];
 
-        [items addObject:nonstandard];
+    NSArray *versions = [catalog versionsForFamily:family];
+
+    NSMutableArray *versionTitles = [NSMutableArray array];
+    NSMutableArray *versionValues = [NSMutableArray array];
+
+    for (NSDictionary *version in versions) {
+        NSString *number = version[@"version"];
+        NSString *build = version[@"build"];
+
+        if (![number isKindOfClass:[NSString class]] || number.length == 0) {
+            continue;
+        }
+
+        if (![build isKindOfClass:[NSString class]]) {
+            build = @"";
+        }
+
+        NSString *title = number;
+
+        if (build.length > 0) {
+            title = [NSString stringWithFormat:@"%@ (%@)", number, build];
+        }
+
+        NSString *value =
+        [NSString stringWithFormat:@"%@|%@", number, build];
+
+        [versionTitles addObject:title];
+        [versionValues addObject:value];
+    }
+
+    if (versionValues.count > 0) {
+        NSString *selectedVersion =
+        [prefs stringForKey:@"SelectedVersion"] ?: @"";
+
+        NSString *selectedBuild =
+        [prefs stringForKey:@"SelectedBuild"] ?: @"";
+
+        NSString *selectedValue =
+        [NSString stringWithFormat:@"%@|%@", selectedVersion, selectedBuild];
+
+        if (![versionValues containsObject:selectedValue]) {
+            selectedValue = versionValues.firstObject;
+        }
 
         [items addObject:
-         [self statusSpecifier:
-          @"Catalog entries come from IPSW.info and AppleDB."]];
+         [self makeList:@"Operating System"
+                    key:@"SelectedFirmware"
+                 titles:versionTitles
+                 values:versionValues
+                default:selectedValue]];
 
-        _specifiers = items;
+    } else {
+        [items addObject:
+         [self makeStatus:
+          [NSString stringWithFormat:@"No cached %@ versions. Tap Refresh Catalog.",
+           osFamily]]];
     }
+
+    // COMPATIBILITY
+
+    [items addObject:[self makeGroup:@"COMPATIBILITY"]];
+
+    PSSpecifier *nonstandard =
+    [PSSpecifier preferenceSpecifierNamed:@"Non-standard combinations"
+                                    target:self
+                                       set:@selector(setPreferenceValue:specifier:)
+                                       get:@selector(readPreferenceValue:)
+                                    detail:nil
+                                      cell:PSSwitchCell
+                                      edit:nil];
+
+    [nonstandard setProperty:@"NonStandardCombinations" forKey:@"key"];
+    [nonstandard setProperty:DIMDomain forKey:@"defaults"];
+    [nonstandard setProperty:@NO forKey:@"default"];
+
+    [items addObject:nonstandard];
+
+    [items addObject:
+     [self makeStatus:
+      @"Catalog data is provided by IPSW.info and AppleDB."]];
+
+    _specifiers = [items copy];
 
     return _specifiers;
 }
+
+#pragma mark - Save Preferences
 
 - (void)setPreferenceValue:(id)value specifier:(PSSpecifier *)specifier {
     [super setPreferenceValue:value specifier:specifier];
@@ -276,17 +339,10 @@ static NSString * const DIMDomain = @"com.dim.manager";
     NSUserDefaults *prefs = [self prefs];
 
     if ([key isEqualToString:@"DeviceFamily"]) {
-        if ([value isEqualToString:@"iPad"]) {
-            [prefs setObject:@"iPad" forKey:@"DeviceFamily"];
-            [prefs removeObjectForKey:@"SelectedModel"];
-            [prefs removeObjectForKey:@"SelectedVersion"];
-            [prefs removeObjectForKey:@"SelectedBuild"];
-        } else {
-            [prefs setObject:@"iPhone" forKey:@"DeviceFamily"];
-            [prefs removeObjectForKey:@"SelectedModel"];
-            [prefs removeObjectForKey:@"SelectedVersion"];
-            [prefs removeObjectForKey:@"SelectedBuild"];
-        }
+        [prefs removeObjectForKey:@"SelectedModel"];
+        [prefs removeObjectForKey:@"SelectedVersion"];
+        [prefs removeObjectForKey:@"SelectedBuild"];
+        [prefs removeObjectForKey:@"SelectedFirmware"];
     }
 
     if ([key isEqualToString:@"SelectedFirmware"] &&
@@ -309,32 +365,6 @@ static NSString * const DIMDomain = @"com.dim.manager";
 
     _specifiers = nil;
     [self reloadSpecifiers];
-}
-
-- (void)refreshCatalog {
-    [self showLoadingView];
-
-    [[DIMCatalogManager sharedManager]
-     refreshCatalogWithCompletion:^(BOOL success, NSString *message) {
-
-        [self hideLoadingView];
-
-        self->_specifiers = nil;
-        [self reloadSpecifiers];
-
-        UIAlertController *alert =
-        [UIAlertController alertControllerWithTitle:
-         success ? @"Catalog Updated" : @"Catalog Update Failed"
-                                             message:message
-                                      preferredStyle:UIAlertControllerStyleAlert];
-
-        [alert addAction:
-         [UIAlertAction actionWithTitle:@"OK"
-                                  style:UIAlertActionStyleDefault
-                                handler:nil]];
-
-        [self presentViewController:alert animated:YES completion:nil];
-    }];
 }
 
 @end
