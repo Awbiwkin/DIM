@@ -1,6 +1,8 @@
 
 #import <UIKit/UIKit.h>
 #import <objc/message.h>
+#import <math.h>
+#import <stdlib.h>
 
 static NSString * const DIMDomain = @"com.dim.manager";
 static NSString * const DIMSelectedAppsKey = @"SelectedApps";
@@ -20,28 +22,98 @@ static NSString * const DIMSelectedAppsKey = @"SelectedApps";
     return [[NSUserDefaults alloc] initWithSuiteName:DIMDomain];
 }
 
-- (UIImage *)iconForApplication:(id)application {
-    SEL iconSelector = NSSelectorFromString(@"iconDataForVariant:");
-
-    if (![application respondsToSelector:iconSelector]) {
+- (UIImage *)decodeIconData:(NSData *)data {
+    if (![data isKindOfClass:NSData.class] || data.length <= 32) {
         return nil;
     }
 
-    // Пробуем несколько вариантов размера иконки.
-    NSInteger variants[] = {2, 1, 0};
+    // Первые 32 байта — служебный заголовок.
+    NSUInteger pixelBytes = data.length - 32;
+
+    if (pixelBytes % 4 != 0) {
+        return nil;
+    }
+
+    NSUInteger pixelCount = pixelBytes / 4;
+    NSUInteger dimension = (NSUInteger)sqrt((double)pixelCount);
+
+    if (dimension == 0 || dimension * dimension != pixelCount) {
+        return nil;
+    }
+
+    NSUInteger width = dimension;
+    NSUInteger height = dimension;
+    NSUInteger bytesPerRow = width * 4;
+
+    void *pixels = calloc(height, bytesPerRow);
+
+    if (!pixels) {
+        return nil;
+    }
+
+    [data getBytes:pixels
+             range:NSMakeRange(32, pixelBytes)];
+
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+
+    if (!colorSpace) {
+        free(pixels);
+        return nil;
+    }
+
+    CGContextRef context = CGBitmapContextCreate(
+        pixels,
+        width,
+        height,
+        8,
+        bytesPerRow,
+        colorSpace,
+        kCGBitmapByteOrder32Little | kCGImageAlphaPremultipliedFirst
+    );
+
+    CGColorSpaceRelease(colorSpace);
+
+    if (!context) {
+        free(pixels);
+        return nil;
+    }
+
+    CGImageRef cgImage = CGBitmapContextCreateImage(context);
+
+    CGContextRelease(context);
+    free(pixels);
+
+    if (!cgImage) {
+        return nil;
+    }
+
+    UIImage *image = [UIImage imageWithCGImage:cgImage
+                                        scale:[UIScreen mainScreen].scale
+                                  orientation:UIImageOrientationUp];
+
+    CGImageRelease(cgImage);
+
+    return image;
+}
+
+- (UIImage *)iconForApplication:(id)application {
+    SEL selector = NSSelectorFromString(@"iconDataForVariant:");
+
+    if (![application respondsToSelector:selector]) {
+        return nil;
+    }
+
+    // Сначала основной вариант иконки.
+    int variants[] = {2, 1, 0};
 
     for (NSUInteger i = 0; i < sizeof(variants) / sizeof(variants[0]); i++) {
-        NSData *iconData = ((id (*)(id, SEL, NSInteger))objc_msgSend)(
+        NSData *data = ((id (*)(id, SEL, int))objc_msgSend)(
             application,
-            iconSelector,
+            selector,
             variants[i]
         );
 
-        if (![iconData isKindOfClass:NSData.class] || iconData.length == 0) {
-            continue;
-        }
-
-        UIImage *image = [UIImage imageWithData:iconData];
+        UIImage *image = [self decodeIconData:data];
 
         if (image) {
             return image;
@@ -60,7 +132,9 @@ static NSString * const DIMSelectedAppsKey = @"SelectedApps";
 
     SEL defaultSelector = NSSelectorFromString(@"defaultWorkspace");
 
-    if (![workspaceClass respondsToSelector:defaultSelector]) return @[];
+    if (![workspaceClass respondsToSelector:defaultSelector]) {
+        return @[];
+    }
 
     id workspace = ((id (*)(id, SEL))objc_msgSend)(
         workspaceClass,
@@ -71,26 +145,37 @@ static NSString * const DIMSelectedAppsKey = @"SelectedApps";
 
     SEL appsSelector = NSSelectorFromString(@"allInstalledApplications");
 
-    if (![workspace respondsToSelector:appsSelector]) return @[];
+    if (![workspace respondsToSelector:appsSelector]) {
+        return @[];
+    }
 
     id installed = ((id (*)(id, SEL))objc_msgSend)(
         workspace,
         appsSelector
     );
 
-    if (![installed isKindOfClass:NSArray.class]) return @[];
+    if (![installed isKindOfClass:NSArray.class]) {
+        return @[];
+    }
 
     for (id app in installed) {
         SEL bundleSelector = NSSelectorFromString(@"bundleIdentifier");
 
-        if (![app respondsToSelector:bundleSelector]) continue;
+        if (![app respondsToSelector:bundleSelector]) {
+            bundleSelector = NSSelectorFromString(@"applicationIdentifier");
+        }
+
+        if (![app respondsToSelector:bundleSelector]) {
+            continue;
+        }
 
         id bundle = ((id (*)(id, SEL))objc_msgSend)(
             app,
             bundleSelector
         );
 
-        if (![bundle isKindOfClass:NSString.class] || ![bundle length]) {
+        if (![bundle isKindOfClass:NSString.class] ||
+            ![(NSString *)bundle length]) {
             continue;
         }
 
@@ -104,7 +189,8 @@ static NSString * const DIMSelectedAppsKey = @"SelectedApps";
             );
         }
 
-        if (![name isKindOfClass:NSString.class] || ![name length]) {
+        if (![name isKindOfClass:NSString.class] ||
+            ![(NSString *)name length]) {
             name = bundle;
         }
 
@@ -137,6 +223,7 @@ static NSString * const DIMSelectedAppsKey = @"SelectedApps";
 
     self.title = @"Choose Applications";
     self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
+    self.tableView.rowHeight = 64.0;
 
     NSArray *saved = [[self prefs] arrayForKey:DIMSelectedAppsKey];
 
@@ -158,8 +245,6 @@ static NSString * const DIMSelectedAppsKey = @"SelectedApps";
     [self.searchBar sizeToFit];
 
     self.tableView.tableHeaderView = self.searchBar;
-
-    self.tableView.rowHeight = 64.0;
 
     self.navigationItem.rightBarButtonItem =
     [[UIBarButtonItem alloc]
@@ -258,9 +343,7 @@ static NSString * const DIMSelectedAppsKey = @"SelectedApps";
     cell.textLabel.textColor = UIColor.labelColor;
     cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
 
-    UIImage *icon = app[@"icon"];
-
-    cell.imageView.image = icon;
+    cell.imageView.image = app[@"icon"];
 
     cell.accessoryType =
         [self.selectedApps containsObject:bundle]
