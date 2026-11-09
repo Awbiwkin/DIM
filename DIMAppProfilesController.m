@@ -19,7 +19,7 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
 
 - (NSArray *)specifiers {
     if (!_specifiers) {
-        _specifiers = @[];
+        _specifiers = [NSMutableArray array];
     }
     return _specifiers;
 }
