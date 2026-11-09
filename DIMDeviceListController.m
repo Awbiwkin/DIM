@@ -1,3 +1,4 @@
+
 #import <UIKit/UIKit.h>
 #import <Preferences/PSListController.h>
 #import <Preferences/PSSpecifier.h>
@@ -719,12 +720,17 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 
         NSString *selectedModel = [self selectedModel];
 
-        void (^finish)(NSString *) = ^(NSString *) {
+        void (^finish)(NSString *) = ^(NSString *firmwareMessage) {
             [loading dismissViewControllerAnimated:YES completion:^{
 
                 [self reloadDIMInterface];
 
                 NSString *fullMessage = message ?: @"Catalog refresh finished.";
+
+                if (firmwareMessage.length) {
+                    fullMessage = [fullMessage stringByAppendingFormat:
+                                   @"\n\n%@", firmwareMessage];
+                }
 
                 [self showMessage:fullMessage
                             title:(success ? @"Catalog Updated" : @"Catalog Update")];
@@ -735,18 +741,7 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
             [[DIMCatalogManager sharedManager]
              refreshFirmwaresForDevice:selectedModel
              completion:^(BOOL firmwareSuccess, NSString *firmwareMessage) {
-                NSString *combined = message ?: @"Catalog refresh finished.";
-
-                if (firmwareMessage.length) {
-                    combined = [combined stringByAppendingFormat:
-                                @"\n\n%@", firmwareMessage];
-                }
-
-                [loading dismissViewControllerAnimated:YES completion:^{
-                    [self reloadDIMInterface];
-                    [self showMessage:combined
-                                title:(success ? @"Catalog Updated" : @"Catalog Update")];
-                }];
+                finish(firmwareMessage);
             }];
         } else {
             finish(nil);
