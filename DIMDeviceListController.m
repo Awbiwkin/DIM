@@ -165,6 +165,7 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     if (!family.length) {
         family = [DIMCatalogManager currentDeviceFamily];
         [[self prefs] setObject:family forKey:@"DeviceFamily"];
+        [[self prefs] synchronize];
     }
 
     return family;
@@ -182,6 +183,7 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 
         if (model.length) {
             [[self prefs] setObject:model forKey:@"SelectedModel"];
+            [[self prefs] synchronize];
             return model;
         }
     }
@@ -292,6 +294,116 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 - (NSString *)modelNumberDisplayName {
     NSString *number = [self selectedModelNumber];
     return number.length ? number : @"Not selected";
+}
+
+#pragma mark - Saved Profile Diagnostics
+
+- (NSArray<NSString *> *)savedProfileDiagnosticLines {
+    NSUserDefaults *prefs = [self prefs];
+    [prefs synchronize];
+
+    id rawModel = [prefs objectForKey:@"SelectedModel"];
+    id rawVersion = [prefs objectForKey:@"SelectedVersion"];
+    id rawBuild = [prefs objectForKey:@"SelectedBuild"];
+
+    NSString *model =
+        [rawModel isKindOfClass:NSString.class] ? rawModel : @"<EMPTY>";
+
+    NSString *version =
+        [rawVersion isKindOfClass:NSString.class] ? rawVersion : @"<EMPTY>";
+
+    NSString *build =
+        [rawBuild isKindOfClass:NSString.class] ? rawBuild : @"<EMPTY>";
+
+    NSArray *devices = [prefs arrayForKey:@"DIMCatalogDevices"];
+
+    BOOL foundDevice = NO;
+    NSString *board = @"<NOT FOUND>";
+
+    if ([devices isKindOfClass:NSArray.class]) {
+        for (id entry in devices) {
+            if (![entry isKindOfClass:NSDictionary.class]) continue;
+
+            if ([entry[@"identifier"] isKindOfClass:NSString.class] &&
+                [entry[@"identifier"] isEqualToString:model]) {
+
+                foundDevice = YES;
+
+                id rawBoard = entry[@"boardconfig"];
+
+                if ([rawBoard isKindOfClass:NSString.class] &&
+                    [rawBoard length]) {
+                    board = rawBoard;
+                } else {
+                    board = @"<EMPTY>";
+                }
+
+                break;
+            }
+        }
+    }
+
+    NSString *firmwareKey = nil;
+
+    if (model.length && ![model isEqualToString:@"<EMPTY>"]) {
+        firmwareKey = [NSString stringWithFormat:@"DIMFirmware_%@",
+                       [model stringByReplacingOccurrencesOfString:@","
+                                                         withString:@"_"]];
+    }
+
+    NSArray *firmwares = firmwareKey
+        ? [prefs arrayForKey:firmwareKey] : nil;
+
+    BOOL foundFirmware = NO;
+
+    if ([firmwares isKindOfClass:NSArray.class]) {
+        for (id entry in firmwares) {
+            if (![entry isKindOfClass:NSDictionary.class]) continue;
+
+            NSString *entryVersion =
+                [entry[@"version"] isKindOfClass:NSString.class]
+                ? entry[@"version"] : @"";
+
+            NSString *entryBuild =
+                [entry[@"build"] isKindOfClass:NSString.class]
+                ? entry[@"build"] : @"";
+
+            if ([entryVersion isEqualToString:version] &&
+                [entryBuild isEqualToString:build] &&
+                version.length && build.length) {
+                foundFirmware = YES;
+                break;
+            }
+        }
+    }
+
+    BOOL enabled = [prefs boolForKey:@"Enabled"];
+    BOOL deviceEnabled = [prefs boolForKey:@"DeviceEnabled"];
+    BOOL globalEnabled = [prefs boolForKey:@"GlobalProfileEnabled"];
+    BOOL onlyInEnabled = [prefs boolForKey:@"OnlyInEnabled"];
+
+    NSArray *selectedApps = [prefs arrayForKey:@"SelectedApps"];
+
+    return @[
+        [NSString stringWithFormat:@"Raw SelectedModel: %@", model],
+        [NSString stringWithFormat:@"Raw SelectedVersion: %@", version],
+        [NSString stringWithFormat:@"Raw SelectedBuild: %@", build],
+        [NSString stringWithFormat:@"Catalog records: %lu",
+         (unsigned long)devices.count],
+        [NSString stringWithFormat:@"Device in catalog: %@",
+         foundDevice ? @"YES" : @"NO"],
+        [NSString stringWithFormat:@"Raw BoardConfig: %@", board],
+        [NSString stringWithFormat:@"Firmware in device cache: %@",
+         foundFirmware ? @"YES" : @"NO"],
+        [NSString stringWithFormat:@"Enabled: %@ · DeviceEnabled: %@",
+         enabled ? @"YES" : @"NO",
+         deviceEnabled ? @"YES" : @"NO"],
+        [NSString stringWithFormat:@"Global: %@ · OnlyIn: %@",
+         globalEnabled ? @"YES" : @"NO",
+         onlyInEnabled ? @"YES" : @"NO"],
+        [NSString stringWithFormat:@"SelectedApps count: %lu",
+         (unsigned long)selectedApps.count]
+    ];
 }
 
 #pragma mark - Spoofed Device Status
@@ -461,6 +573,8 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
         [[self prefs] removeObjectForKey:@"SelectedVersion"];
         [[self prefs] removeObjectForKey:@"SelectedBuild"];
 
+        [[self prefs] synchronize];
+
         [self reloadDIMInterface];
     }];
 }
@@ -511,6 +625,8 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
         [[self prefs] removeObjectForKey:@"SelectedVersion"];
         [[self prefs] removeObjectForKey:@"SelectedBuild"];
 
+        [[self prefs] synchronize];
+
         [self reloadDIMInterface];
 
         [[DIMCatalogManager sharedManager]
@@ -555,6 +671,7 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 
         [[self prefs] setObject:item[@"value"] forKey:@"SelectedRegion"];
         [[self prefs] removeObjectForKey:@"SelectedModelNumber"];
+        [[self prefs] synchronize];
 
         [self reloadDIMInterface];
     }];
@@ -600,6 +717,8 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
         if (!self) return;
 
         [[self prefs] setObject:item[@"value"] forKey:@"SelectedModelNumber"];
+        [[self prefs] synchronize];
+
         [self reloadDIMInterface];
     }];
 }
@@ -688,6 +807,8 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 
         [[self prefs] setObject:item[@"compatible"] ?: @NO
                          forKey:@"SelectedBuildCompatible"];
+
+        [[self prefs] synchronize];
 
         [self reloadDIMInterface];
     }];
@@ -868,6 +989,12 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [items addObject:
      [self makeButton:@"Choose iOS / iPadOS Build"
                action:@selector(openFirmwarePicker)]];
+
+    [items addObject:[self makeGroup:@"SAVED PROFILE DATA"]];
+
+    for (NSString *line in [self savedProfileDiagnosticLines]) {
+        [items addObject:[self makeStatus:line]];
+    }
 
     [items addObject:[self makeGroup:@"APPLICATION SCOPE"]];
 
