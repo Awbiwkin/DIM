@@ -161,13 +161,10 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
 
     cell.textLabel.text = app[@"name"];
     cell.textLabel.numberOfLines = 1;
-
-    cell.detailTextLabel.text = nil;
-    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
-
     cell.detailTextLabel.text =
         [NSString stringWithFormat:@"%@ · %@", mode, bundleID];
 
+    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
     cell.textLabel.textColor = UIColor.labelColor;
     cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
 
@@ -225,11 +222,14 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
                                  style:UIAlertActionStyleCancel
                                handler:nil]];
 
+    UITableViewCell *selectedCell =
+        [tableView cellForRowAtIndexPath:indexPath];
+
     alert.popoverPresentationController.sourceView =
-        tableView.cellForRowAtIndexPath(indexPath);
+        selectedCell ?: self.view;
 
     alert.popoverPresentationController.sourceRect =
-        tableView.cellForRowAtIndexPath(indexPath).bounds;
+        selectedCell ? selectedCell.bounds : self.view.bounds;
 
     [self presentViewController:alert animated:YES completion:nil];
 }
