@@ -1,15 +1,12 @@
 
 THEOS_PACKAGE_SCHEME = rootless
-
 ARCHS = arm64
 TARGET = iphone:clang:16.5:15.0
-
 INSTALL_TARGET_PROCESSES = SpringBoard
 
 include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = DIMCore
-
 DIMCore_FILES = Tweak.xm
 DIMCore_CFLAGS = -fobjc-arc
 DIMCore_FRAMEWORKS = UIKit
@@ -21,7 +18,8 @@ BUNDLE_NAME = DIMPreferences
 DIMPreferences_FILES = \
     DIMRootListController.m \
     DIMDeviceListController.m \
-    DIMCatalogManager.m
+    DIMCatalogManager.m \
+    DIMAppProfilesController.m
 
 DIMPreferences_CFLAGS = -fobjc-arc
 DIMPreferences_FRAMEWORKS = UIKit
