@@ -1,25 +1,31 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <CoreFoundation/CoreFoundation.h>
 #import <sys/types.h>
 #import <sys/sysctl.h>
 #import <sys/utsname.h>
 #import <substrate.h>
+#import <dlfcn.h>
 #import <errno.h>
 #import <string.h>
 #import <stdio.h>
 
 static NSString * const DIMDomain = @"com.dim.manager";
 
-static int (*DIMOriginalSysctlByName)(
-    const char *,
-    void *,
-    size_t *,
-    void *,
-    size_t
-);
+typedef CFPropertyListRef (*DIMMGCopyAnswerFunction)(CFStringRef);
 
-static int (*DIMOriginalUname)(struct utsname *);
+static DIMMGCopyAnswerFunction DIMOriginalMGCopyAnswer = NULL;
+
+static int (*DIMOriginalSysctlByName)(
+    const char *, void *, size_t *, void *, size_t
+) = NULL;
+
+static int (*DIMOriginalSysctl)(
+    int *, u_int, void *, size_t *, void *, size_t
+) = NULL;
+
+static int (*DIMOriginalUname)(struct utsname *) = NULL;
 
 static NSDictionary *DIMActiveConfiguration(void) {
     NSUserDefaults *prefs =
@@ -34,7 +40,6 @@ static NSDictionary *DIMActiveConfiguration(void) {
     BOOL global = [prefs boolForKey:@"GlobalProfileEnabled"];
     BOOL onlyIn = [prefs boolForKey:@"OnlyInEnabled"];
 
-    // Без выбранной области применения ничего не подменяем.
     if (!global && !onlyIn) {
         return nil;
     }
@@ -53,6 +58,7 @@ static NSDictionary *DIMActiveConfiguration(void) {
     NSString *model = [prefs stringForKey:@"SelectedModel"] ?: @"";
     NSString *version = [prefs stringForKey:@"SelectedVersion"] ?: @"";
     NSString *build = [prefs stringForKey:@"SelectedBuild"] ?: @"";
+    NSString *family = [prefs stringForKey:@"DeviceFamily"] ?: @"";
 
     if (!model.length && !version.length && !build.length) {
         return nil;
@@ -61,22 +67,98 @@ static NSDictionary *DIMActiveConfiguration(void) {
     return @{
         @"model": model,
         @"version": version,
-        @"build": build
+        @"build": build,
+        @"family": family
     };
 }
 
-static NSString *DIMConfigurationValue(NSString *key) {
+static NSString *DIMValue(NSString *key) {
     NSDictionary *config = DIMActiveConfiguration();
 
-    if (!config) {
+    if (!config) return nil;
+
+    id value = config[key];
+
+    if (![value isKindOfClass:NSString.class]) return nil;
+
+    return [value length] ? value : nil;
+}
+
+static NSString *DIMMGKey(CFStringRef key) {
+    if (!key || CFGetTypeID(key) != CFStringGetTypeID()) {
         return nil;
     }
 
-    NSString *value = config[key];
+    // Обычные и известные obfuscated MobileGestalt keys.
+    if (CFStringCompare(key, CFSTR("ProductType"), 0) == kCFCompareEqualTo ||
+        CFStringCompare(key, CFSTR("h9jDsbgj7xIVeIQ8S3/X3Q"), 0) == kCFCompareEqualTo) {
+        return @"model";
+    }
 
-    return [value isKindOfClass:NSString.class] && value.length
-        ? value
-        : nil;
+    if (CFStringCompare(key, CFSTR("ProductVersion"), 0) == kCFCompareEqualTo ||
+        CFStringCompare(key, CFSTR("qNNddlUK+B/YlooNoymwgA"), 0) == kCFCompareEqualTo) {
+        return @"version";
+    }
+
+    if (CFStringCompare(key, CFSTR("BuildVersion"), 0) == kCFCompareEqualTo ||
+        CFStringCompare(key, CFSTR("mZfUC7qo4pURNhyMHZ62RQ"), 0) == kCFCompareEqualTo) {
+        return @"build";
+    }
+
+    return nil;
+}
+
+static CFPropertyListRef DIMHookMGCopyAnswer(CFStringRef key) {
+    NSString *configKey = DIMMGKey(key);
+
+    if (configKey) {
+        NSString *replacement = DIMValue(configKey);
+
+        if (replacement.length) {
+            return CFStringCreateWithCString(
+                kCFAllocatorDefault,
+                replacement.UTF8String,
+                kCFStringEncodingUTF8
+            );
+        }
+    }
+
+    if (DIMOriginalMGCopyAnswer) {
+        return DIMOriginalMGCopyAnswer(key);
+    }
+
+    return NULL;
+}
+
+static int DIMCopyStringToBuffer(
+    NSString *replacement,
+    void *oldp,
+    size_t *oldlenp
+) {
+    if (!replacement.length) return -1;
+
+    size_t required = replacement.length + 1;
+
+    if (!oldp) {
+        if (oldlenp) {
+            *oldlenp = required;
+        }
+        return 0;
+    }
+
+    if (!oldlenp || *oldlenp < required) {
+        if (oldlenp) {
+            *oldlenp = required;
+        }
+
+        errno = ENOMEM;
+        return -1;
+    }
+
+    memcpy(oldp, replacement.UTF8String, required);
+    *oldlenp = required;
+
+    return 0;
 }
 
 static int DIMHookSysctlByName(
@@ -95,43 +177,58 @@ static int DIMHookSysctlByName(
             key = @"build";
         }
 
-        NSString *replacement = key
-            ? DIMConfigurationValue(key)
-            : nil;
+        NSString *replacement = key ? DIMValue(key) : nil;
 
         if (replacement.length) {
-            size_t required = replacement.length + 1;
-
-            if (!oldp) {
-                if (oldlenp) {
-                    *oldlenp = required;
-                }
-                return 0;
-            }
-
-            if (!oldlenp || *oldlenp < required) {
-                if (oldlenp) {
-                    *oldlenp = required;
-                }
-
-                errno = ENOMEM;
-                return -1;
-            }
-
-            memcpy(oldp, replacement.UTF8String, required);
-            *oldlenp = required;
-
-            return 0;
+            return DIMCopyStringToBuffer(
+                replacement,
+                oldp,
+                oldlenp
+            );
         }
     }
 
     if (DIMOriginalSysctlByName) {
         return DIMOriginalSysctlByName(
-            name,
-            oldp,
-            oldlenp,
-            newp,
-            newlen
+            name, oldp, oldlenp, newp, newlen
+        );
+    }
+
+    errno = ENOSYS;
+    return -1;
+}
+
+static int DIMHookSysctl(
+    int *name,
+    u_int namelen,
+    void *oldp,
+    size_t *oldlenp,
+    void *newp,
+    size_t newlen
+) {
+    if (name && namelen >= 2 && !newp) {
+        NSString *key = nil;
+
+        if (name[0] == CTL_HW && name[1] == HW_MACHINE) {
+            key = @"model";
+        } else if (name[0] == CTL_KERN && name[1] == KERN_OSVERSION) {
+            key = @"build";
+        }
+
+        NSString *replacement = key ? DIMValue(key) : nil;
+
+        if (replacement.length) {
+            return DIMCopyStringToBuffer(
+                replacement,
+                oldp,
+                oldlenp
+            );
+        }
+    }
+
+    if (DIMOriginalSysctl) {
+        return DIMOriginalSysctl(
+            name, namelen, oldp, oldlenp, newp, newlen
         );
     }
 
@@ -147,11 +244,9 @@ static int DIMHookUname(struct utsname *info) {
 
     int result = DIMOriginalUname(info);
 
-    if (result != 0 || !info) {
-        return result;
-    }
+    if (result != 0 || !info) return result;
 
-    NSString *model = DIMConfigurationValue(@"model");
+    NSString *model = DIMValue(@"model");
 
     if (model.length) {
         memset(info->machine, 0, sizeof(info->machine));
@@ -168,34 +263,59 @@ static int DIMHookUname(struct utsname *info) {
 }
 
 static NSOperatingSystemVersion DIMVersionFromString(
-    NSString *versionString,
+    NSString *string,
     NSOperatingSystemVersion fallback
 ) {
-    if (!versionString.length) {
-        return fallback;
-    }
+    if (!string.length) return fallback;
 
-    NSArray<NSString *> *parts =
-        [versionString componentsSeparatedByString:@"."];
+    NSArray *parts = [string componentsSeparatedByString:@"."];
 
-    NSOperatingSystemVersion version;
-    version.majorVersion = parts.count > 0 ? parts[0].integerValue : 0;
-    version.minorVersion = parts.count > 1 ? parts[1].integerValue : 0;
-    version.patchVersion = parts.count > 2 ? parts[2].integerValue : 0;
+    NSOperatingSystemVersion result;
+    result.majorVersion = parts.count > 0 ? [parts[0] integerValue] : 0;
+    result.minorVersion = parts.count > 1 ? [parts[1] integerValue] : 0;
+    result.patchVersion = parts.count > 2 ? [parts[2] integerValue] : 0;
 
-    if (version.majorVersion <= 0) {
-        return fallback;
-    }
+    if (result.majorVersion <= 0) return fallback;
 
-    return version;
+    return result;
 }
 
 %hook UIDevice
 
 - (NSString *)systemVersion {
-    NSString *version = DIMConfigurationValue(@"version");
+    NSString *value = DIMValue(@"version");
+    return value.length ? value : %orig;
+}
 
-    return version.length ? version : %orig;
+- (NSString *)model {
+    NSDictionary *config = DIMActiveConfiguration();
+
+    if (config) {
+        NSString *family = config[@"family"];
+
+        if ([family isEqualToString:@"iPad"]) return @"iPad";
+        if ([family isEqualToString:@"iPhone"]) return @"iPhone";
+    }
+
+    return %orig;
+}
+
+- (NSString *)localizedModel {
+    NSDictionary *config = DIMActiveConfiguration();
+
+    if (config) {
+        NSString *family = config[@"family"];
+
+        if ([family isEqualToString:@"iPad"]) return @"iPad";
+        if ([family isEqualToString:@"iPhone"]) return @"iPhone";
+    }
+
+    return %orig;
+}
+
+- (NSString *)buildVersion {
+    NSString *value = DIMValue(@"build");
+    return value.length ? value : %orig;
 }
 
 %end
@@ -205,13 +325,14 @@ static NSOperatingSystemVersion DIMVersionFromString(
 - (NSOperatingSystemVersion)operatingSystemVersion {
     NSOperatingSystemVersion original = %orig;
 
-    NSString *version = DIMConfigurationValue(@"version");
-
-    return DIMVersionFromString(version, original);
+    return DIMVersionFromString(
+        DIMValue(@"version"),
+        original
+    );
 }
 
 - (NSString *)operatingSystemVersionString {
-    NSString *version = DIMConfigurationValue(@"version");
+    NSString *version = DIMValue(@"version");
 
     if (version.length) {
         return [NSString stringWithFormat:@"Version %@", version];
@@ -224,10 +345,33 @@ static NSOperatingSystemVersion DIMVersionFromString(
 
 %ctor {
     @autoreleasepool {
+        void *mgHandle = dlopen(
+            "/usr/lib/libMobileGestalt.dylib",
+            RTLD_NOW
+        );
+
+        if (mgHandle) {
+            void *symbol = dlsym(mgHandle, "MGCopyAnswer");
+
+            if (symbol) {
+                MSHookFunction(
+                    symbol,
+                    (void *)DIMHookMGCopyAnswer,
+                    (void **)&DIMOriginalMGCopyAnswer
+                );
+            }
+        }
+
         MSHookFunction(
             (void *)sysctlbyname,
             (void *)DIMHookSysctlByName,
             (void **)&DIMOriginalSysctlByName
+        );
+
+        MSHookFunction(
+            (void *)sysctl,
+            (void *)DIMHookSysctl,
+            (void **)&DIMOriginalSysctl
         );
 
         MSHookFunction(
@@ -239,15 +383,17 @@ static NSOperatingSystemVersion DIMVersionFromString(
         NSString *bundleID =
             NSBundle.mainBundle.bundleIdentifier ?: @"unknown";
 
-        NSLog(@"[DIM] Runtime loaded: %@", bundleID);
-
         NSDictionary *config = DIMActiveConfiguration();
 
+        NSLog(@"[DIM] Runtime loaded: %@", bundleID);
+        NSLog(@"[DIM] MobileGestalt hook: %@",
+              DIMOriginalMGCopyAnswer ? @"installed" : @"unavailable");
+
         if (config) {
-            NSLog(@"[DIM] Identity active for %@", bundleID);
-            NSLog(@"[DIM] Model: %@", config[@"model"]);
-            NSLog(@"[DIM] iOS: %@", config[@"version"]);
-            NSLog(@"[DIM] Build: %@", config[@"build"]);
+            NSLog(@"[DIM] Active for %@", bundleID);
+            NSLog(@"[DIM] ProductType: %@", config[@"model"]);
+            NSLog(@"[DIM] ProductVersion: %@", config[@"version"]);
+            NSLog(@"[DIM] BuildVersion: %@", config[@"build"]);
         } else {
             NSLog(@"[DIM] Identity inactive for %@", bundleID);
         }
