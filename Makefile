@@ -1,4 +1,3 @@
-# Гарантированно определяем путь к THEOS до любых инклюдов
 ifeq ($(THEOS),)
 THEOS := $(shell pwd)/theos
 endif
@@ -20,5 +19,7 @@ DeviceIdentityManager_CFLAGS = -fobjc-arc -I. -ICore
 DeviceIdentityManager_FRAMEWORKS = UIKit CoreLocation CoreGraphics SystemConfiguration
 
 include $(THEOS_MAKEFILE_PATH)/tweak.mk
+
+# Используем прямой путь через $(THEOS) вместо THEOS_MAKEFILE_PATH для сабпроектов
 SUBPROJECTS += Preferences
-include $(THEOS_MAKEFILE_PATH)/aggregate.mk
+include $(THEOS)/makefiles/aggregate.mk
