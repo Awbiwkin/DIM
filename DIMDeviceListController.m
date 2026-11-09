@@ -2,6 +2,7 @@
 #import <UIKit/UIKit.h>
 #import <Preferences/PSListController.h>
 #import <Preferences/PSSpecifier.h>
+#import <Preferences/PSListItemsController.h>
 #import "DIMCatalogManager.h"
 
 static NSString * const DIMDomain = @"com.dim.manager";
@@ -50,7 +51,7 @@ static NSString * const DIMDomain = @"com.dim.manager";
                                     target:self
                                        set:@selector(setPreferenceValue:specifier:)
                                        get:@selector(readPreferenceValue:)
-                                    detail:@"PSListItemsController"
+                                    detail:[PSListItemsController class]
                                       cell:PSLinkListCell
                                       edit:nil];
 
@@ -297,7 +298,8 @@ static NSString * const DIMDomain = @"com.dim.manager";
     } else {
         [items addObject:
          [self makeStatus:
-          [NSString stringWithFormat:@"No cached %@ versions. Tap Refresh Catalog.",
+          [NSString stringWithFormat:
+           @"No cached %@ versions. Tap Refresh Catalog.",
            osFamily]]];
     }
 
