@@ -1,3 +1,5 @@
+export THEOS
+
 TARGET := iphone:clang:latest:15.0
 THEOS_PACKAGE_SCHEME = rootless
 
