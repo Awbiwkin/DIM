@@ -9,6 +9,7 @@
 
     <key>items</key>
     <array>
+
         <dict>
             <key>cell</key>
             <string>PSGroupCell</string>
@@ -27,6 +28,22 @@
             <true/>
             <key>defaults</key>
             <string>com.dim.manager</string>
+        </dict>
+
+        <dict>
+            <key>cell</key>
+            <string>PSGroupCell</string>
+            <key>label</key>
+            <string>DEVICE</string>
+        </dict>
+
+        <dict>
+            <key>cell</key>
+            <string>PSLinkCell</string>
+            <key>label</key>
+            <string>Device Identity</string>
+            <key>detail</key>
+            <string>DIMDeviceListController</string>
         </dict>
 
         <dict>
@@ -87,6 +104,7 @@
             <key>defaults</key>
             <string>com.dim.manager</string>
         </dict>
+
     </array>
 </dict>
 </plist>
