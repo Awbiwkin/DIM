@@ -1,25 +1,40 @@
 
 #import <UIKit/UIKit.h>
+#import <Preferences/PSListController.h>
+#import <Preferences/PSSpecifier.h>
 #import <objc/message.h>
 
 static NSString * const DIMDomain = @"com.dim.manager";
 static NSString * const DIMProfilesKey = @"AppProfiles";
 
-@interface DIMAppProfilesController : UITableViewController <UISearchBarDelegate>
+@interface DIMAppProfilesController : PSListController <UISearchBarDelegate>
+
 @property (nonatomic, strong) NSArray<NSDictionary *> *apps;
 @property (nonatomic, strong) NSArray<NSDictionary *> *filteredApps;
 @property (nonatomic, strong) UISearchBar *searchBar;
+
 @end
 
 @implementation DIMAppProfilesController
+
+- (NSArray *)specifiers {
+    if (!_specifiers) {
+        _specifiers = @[];
+    }
+    return _specifiers;
+}
 
 - (NSUserDefaults *)prefs {
     return [[NSUserDefaults alloc] initWithSuiteName:DIMDomain];
 }
 
 - (NSDictionary *)savedProfiles {
-    NSDictionary *profiles = [[self prefs] dictionaryForKey:DIMProfilesKey];
-    return [profiles isKindOfClass:NSDictionary.class] ? profiles : @{};
+    NSDictionary *profiles =
+        [[self prefs] dictionaryForKey:DIMProfilesKey];
+
+    return [profiles isKindOfClass:NSDictionary.class]
+        ? profiles
+        : @{};
 }
 
 - (NSString *)modeForBundle:(NSString *)bundleID {
@@ -30,51 +45,92 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
 - (NSArray<NSDictionary *> *)installedApps {
     NSMutableArray *result = [NSMutableArray array];
 
-    Class workspaceClass = NSClassFromString(@"LSApplicationWorkspace");
-    if (!workspaceClass) return @[];
+    Class workspaceClass =
+        NSClassFromString(@"LSApplicationWorkspace");
+
+    if (!workspaceClass) {
+        return @[];
+    }
+
+    SEL defaultSelector = NSSelectorFromString(@"defaultWorkspace");
+
+    if (![workspaceClass respondsToSelector:defaultSelector]) {
+        return @[];
+    }
 
     id workspace =
         ((id (*)(id, SEL))objc_msgSend)(
-            workspaceClass, NSSelectorFromString(@"defaultWorkspace")
+            workspaceClass,
+            defaultSelector
         );
 
-    if (!workspace) return @[];
+    if (!workspace) {
+        return @[];
+    }
 
-    NSArray *installed =
+    SEL appsSelector =
+        NSSelectorFromString(@"allInstalledApplications");
+
+    if (![workspace respondsToSelector:appsSelector]) {
+        return @[];
+    }
+
+    id installed =
         ((id (*)(id, SEL))objc_msgSend)(
-            workspace, NSSelectorFromString(@"allInstalledApplications")
+            workspace,
+            appsSelector
         );
 
-    if (![installed isKindOfClass:NSArray.class]) return @[];
+    if (![installed isKindOfClass:NSArray.class]) {
+        return @[];
+    }
 
     for (id app in installed) {
-        NSString *bundleID =
-            ((id (*)(id, SEL))objc_msgSend)(
-                app, NSSelectorFromString(@"bundleIdentifier")
-            );
+        SEL bundleSelector =
+            NSSelectorFromString(@"bundleIdentifier");
 
-        if (![bundleID isKindOfClass:NSString.class] ||
-            bundleID.length == 0) {
+        if (![app respondsToSelector:bundleSelector]) {
             continue;
         }
 
-        NSString *name =
+        id bundle =
             ((id (*)(id, SEL))objc_msgSend)(
-                app, NSSelectorFromString(@"localizedName")
+                app,
+                bundleSelector
             );
 
-        if (![name isKindOfClass:NSString.class] || !name.length) {
-            name = bundleID;
+        if (![bundle isKindOfClass:NSString.class] ||
+            ![bundle length]) {
+            continue;
+        }
+
+        SEL nameSelector =
+            NSSelectorFromString(@"localizedName");
+
+        id name = nil;
+
+        if ([app respondsToSelector:nameSelector]) {
+            name =
+                ((id (*)(id, SEL))objc_msgSend)(
+                    app,
+                    nameSelector
+                );
+        }
+
+        if (![name isKindOfClass:NSString.class] ||
+            ![name length]) {
+            name = bundle;
         }
 
         [result addObject:@{
             @"name": name,
-            @"bundle": bundleID
+            @"bundle": bundle
         }];
     }
 
     [result sortUsingComparator:^NSComparisonResult(
-        NSDictionary *a, NSDictionary *b
+        NSDictionary *a,
+        NSDictionary *b
     ) {
         return [a[@"name"] localizedStandardCompare:b[@"name"]];
     }];
@@ -86,7 +142,8 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
     [super viewDidLoad];
 
     self.title = @"App Profiles";
-    self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
+    self.view.backgroundColor =
+        UIColor.systemGroupedBackgroundColor;
 
     self.navigationItem.rightBarButtonItem =
         [[UIBarButtonItem alloc]
@@ -97,20 +154,25 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
     self.searchBar = [[UISearchBar alloc] init];
     self.searchBar.delegate = self;
     self.searchBar.placeholder = @"Search installed apps";
-    self.searchBar.autocorrectionType = UITextAutocorrectionTypeNo;
-    self.searchBar.autocapitalizationType = UITextAutocapitalizationTypeNone;
+    self.searchBar.autocorrectionType =
+        UITextAutocorrectionTypeNo;
+    self.searchBar.autocapitalizationType =
+        UITextAutocapitalizationTypeNone;
 
     self.tableView.tableHeaderView = self.searchBar;
 
-    [self.tableView registerClass:UITableViewCell.class
-           forCellReuseIdentifier:@"DIMAppCell"];
+    [self reloadApps];
+}
 
+- (void)viewWillAppear:(BOOL)animated {
+    [super viewWillAppear:animated];
     [self reloadApps];
 }
 
 - (void)reloadApps {
     self.apps = [self installedApps];
-    self.filteredApps = self.apps;
+    self.filteredApps = self.apps ?: @[];
+
     [self.tableView reloadData];
 }
 
@@ -122,12 +184,15 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
     } else {
         NSPredicate *predicate =
             [NSPredicate predicateWithBlock:^BOOL(
-                NSDictionary *app, NSDictionary *bindings
+                NSDictionary *app,
+                NSDictionary *bindings
             ) {
-                return [app[@"name"]
-                    localizedCaseInsensitiveContainsString:searchText] ||
+                return
+                    [app[@"name"]
+                        localizedCaseInsensitiveContainsString:searchText]
+                    ||
                     [app[@"bundle"]
-                    localizedCaseInsensitiveContainsString:searchText];
+                        localizedCaseInsensitiveContainsString:searchText];
             }];
 
         self.filteredApps =
@@ -137,6 +202,10 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
     [self.tableView reloadData];
 }
 
+- (NSInteger)numberOfSectionsInTableView:(UITableView *)tableView {
+    return 1;
+}
+
 - (NSInteger)tableView:(UITableView *)tableView
  numberOfRowsInSection:(NSInteger)section {
     return self.filteredApps.count;
@@ -144,34 +213,53 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
 
 - (NSString *)tableView:(UITableView *)tableView
  titleForHeaderInSection:(NSInteger)section {
-    return [NSString stringWithFormat:@"%lu installed applications",
-            (unsigned long)self.filteredApps.count];
+
+    return [NSString stringWithFormat:
+        @"%lu installed applications",
+        (unsigned long)self.filteredApps.count];
 }
 
 - (UITableViewCell *)tableView:(UITableView *)tableView
          cellForRowAtIndexPath:(NSIndexPath *)indexPath {
 
+    static NSString *identifier = @"DIMAppCell";
+
     UITableViewCell *cell =
-        [tableView dequeueReusableCellWithIdentifier:@"DIMAppCell"
-                                        forIndexPath:indexPath];
+        [tableView dequeueReusableCellWithIdentifier:identifier];
+
+    if (!cell) {
+        cell = [[UITableViewCell alloc]
+            initWithStyle:UITableViewCellStyleSubtitle
+            reuseIdentifier:identifier];
+    }
 
     NSDictionary *app = self.filteredApps[indexPath.row];
+
     NSString *bundleID = app[@"bundle"];
     NSString *mode = [self modeForBundle:bundleID];
 
     cell.textLabel.text = app[@"name"];
-    cell.textLabel.numberOfLines = 1;
     cell.detailTextLabel.text =
-        [NSString stringWithFormat:@"%@ · %@", mode, bundleID];
+        [NSString stringWithFormat:@"%@ · %@",
+            mode,
+            bundleID];
 
-    cell.accessoryType = UITableViewCellAccessoryDisclosureIndicator;
+    cell.textLabel.numberOfLines = 1;
+    cell.detailTextLabel.numberOfLines = 1;
+
     cell.textLabel.textColor = UIColor.labelColor;
-    cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+    cell.detailTextLabel.textColor =
+        UIColor.secondaryLabelColor;
+
+    cell.accessoryType =
+        UITableViewCellAccessoryDisclosureIndicator;
 
     return cell;
 }
 
-- (void)saveMode:(NSString *)mode forBundle:(NSString *)bundleID {
+- (void)saveMode:(NSString *)mode
+       forBundle:(NSString *)bundleID {
+
     NSMutableDictionary *profiles =
         [[self savedProfiles] mutableCopy];
 
@@ -181,7 +269,9 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
         profiles[bundleID] = mode;
     }
 
-    [[self prefs] setObject:profiles forKey:DIMProfilesKey];
+    [[self prefs] setObject:profiles
+                     forKey:DIMProfilesKey];
+
     [[self prefs] synchronize];
 
     [self.tableView reloadData];
@@ -190,48 +280,58 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
 - (void)tableView:(UITableView *)tableView
 didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 
-    [tableView deselectRowAtIndexPath:indexPath animated:YES];
+    [tableView deselectRowAtIndexPath:indexPath
+                             animated:YES];
+
+    if (indexPath.row >= self.filteredApps.count) {
+        return;
+    }
 
     NSDictionary *app = self.filteredApps[indexPath.row];
+
     NSString *bundleID = app[@"bundle"];
     NSString *name = app[@"name"];
 
     UIAlertController *alert =
-        [UIAlertController alertControllerWithTitle:name
-                                            message:bundleID
-                                     preferredStyle:UIAlertControllerStyleActionSheet];
+        [UIAlertController
+            alertControllerWithTitle:name
+            message:bundleID
+            preferredStyle:UIAlertControllerStyleActionSheet];
 
     __weak typeof(self) weakSelf = self;
 
     [alert addAction:
-        [UIAlertAction actionWithTitle:@"Global Profile"
-                                 style:UIAlertActionStyleDefault
-                               handler:^(UIAlertAction *action) {
-            [weakSelf saveMode:@"Global" forBundle:bundleID];
-        }]];
+        [UIAlertAction
+            actionWithTitle:@"Global Profile"
+            style:UIAlertActionStyleDefault
+            handler:^(UIAlertAction *action) {
+                [weakSelf saveMode:@"Global"
+                         forBundle:bundleID];
+            }]];
 
     [alert addAction:
-        [UIAlertAction actionWithTitle:@"Original Identity"
-                                 style:UIAlertActionStyleDefault
-                               handler:^(UIAlertAction *action) {
-            [weakSelf saveMode:@"Original" forBundle:bundleID];
-        }]];
+        [UIAlertAction
+            actionWithTitle:@"Original Identity"
+            style:UIAlertActionStyleDefault
+            handler:^(UIAlertAction *action) {
+                [weakSelf saveMode:@"Original"
+                         forBundle:bundleID];
+            }]];
 
     [alert addAction:
-        [UIAlertAction actionWithTitle:@"Cancel"
-                                 style:UIAlertActionStyleCancel
-                               handler:nil]];
+        [UIAlertAction
+            actionWithTitle:@"Cancel"
+            style:UIAlertActionStyleCancel
+            handler:nil]];
 
-    UITableViewCell *selectedCell =
-        [tableView cellForRowAtIndexPath:indexPath];
-
-    alert.popoverPresentationController.sourceView =
-        selectedCell ?: self.view;
+    alert.popoverPresentationController.sourceView = self.tableView;
 
     alert.popoverPresentationController.sourceRect =
-        selectedCell ? selectedCell.bounds : self.view.bounds;
+        [tableView rectForRowAtIndexPath:indexPath];
 
-    [self presentViewController:alert animated:YES completion:nil];
+    [self presentViewController:alert
+                       animated:YES
+                     completion:nil];
 }
 
 @end
