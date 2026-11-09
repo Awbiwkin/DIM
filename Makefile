@@ -1,5 +1,5 @@
-# Абсолютно надёжное определение THEOS для любых сред
-ifndef THEOS
+# Жёстко задаем абсолютный путь к theos для GitHub Actions и локальной сборки
+ifeq ($(THEOS),)
 THEOS := $(shell pwd)/theos
 endif
 
@@ -19,7 +19,8 @@ DeviceIdentityManager_FILES = \
 DeviceIdentityManager_CFLAGS = -fobjc-arc -I. -ICore
 DeviceIdentityManager_FRAMEWORKS = UIKit CoreLocation CoreGraphics SystemConfiguration
 
-include $(THEOS_MAKEFILE_PATH)/tweak.mk
+# Подключаем tweak.mk напрямую через $(THEOS), минуя проблемную переменную
+include $(THEOS)/makefiles/tweak.mk
 
 SUBPROJECTS += Preferences
 include $(THEOS)/makefiles/aggregate.mk
