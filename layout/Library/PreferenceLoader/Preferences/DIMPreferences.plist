@@ -1,0 +1,10 @@
+
+{
+    entry = {
+        bundle = DIMPreferences;
+        cell = PSLinkCell;
+        detail = DIMRootListController;
+        isController = 1;
+        label = "Device Identity Manager";
+    };
+}
