@@ -32,7 +32,7 @@ jobs:
           # Скачиваем официальный Linux-тулчейн Theos (clang/ld64)
           if [ ! -d "$THEOS/toolchain/linux" ]; then
             bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos-toolchain.sh)" || true
-          }
+          fi
           # Фолбек на случай, если скрипт не отработал: симлинки на системный clang
           mkdir -p $THEOS/toolchain/linux/iphone/bin
           ln -sf /usr/bin/clang $THEOS/toolchain/linux/iphone/bin/clang
