@@ -1,9 +1,7 @@
-export THEOS := $(shell pwd)/theos
-
-include $(THEOS)/makefiles/common.mk
-
 TARGET := iphone:clang:latest:15.0
 THEOS_PACKAGE_SCHEME = rootless
+
+include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = DeviceIdentityManager
 
