@@ -6,6 +6,9 @@
 
 static NSString * const DIMDomain = @"com.dim.manager";
 
+@interface DIMAppProfilesController : UITableViewController
+@end
+
 @interface DIMPickerController : UITableViewController <UISearchBarDelegate>
 @property (nonatomic, strong) NSArray<NSDictionary *> *items;
 @property (nonatomic, strong) NSArray<NSDictionary *> *filteredItems;
@@ -22,7 +25,7 @@ static NSString * const DIMDomain = @"com.dim.manager";
     [super viewDidLoad];
 
     self.title = self.pickerTitle;
-    self.view.backgroundColor = [UIColor systemGroupedBackgroundColor];
+    self.view.backgroundColor = UIColor.systemGroupedBackgroundColor;
 
     self.searchBar = [[UISearchBar alloc] init];
     self.searchBar.delegate = self;
@@ -110,6 +113,7 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 - (void)openFamilyPicker;
 - (void)openDevicePicker;
 - (void)openFirmwarePicker;
+- (void)openApplicationPicker;
 @end
 
 @implementation DIMDeviceListController
@@ -264,6 +268,18 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [specifier setProperty:@(defaultValue) forKey:@"default"];
 
     return specifier;
+}
+
+#pragma mark - Application Scope
+
+- (void)openApplicationPicker {
+    DIMAppProfilesController *controller =
+    [[DIMAppProfilesController alloc]
+        initWithStyle:UITableViewStyleInsetGrouped];
+
+    controller.title = @"Choose Applications";
+
+    [self.navigationController pushViewController:controller animated:YES];
 }
 
 #pragma mark - Picker Navigation
@@ -595,8 +611,7 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [prefs stringForKey:@"SelectedBuild"] ?: @"Not selected";
 
     [items addObject:
-     [self makeStatus:
-      [NSString stringWithFormat:@"%@ · %@", version, build]]];
+     [self makeStatus:[NSString stringWithFormat:@"%@ · %@", version, build]]];
 
     NSArray *available =
     [catalog buildsForDevice:model
@@ -622,6 +637,22 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [items addObject:
      [self makeButton:@"Choose iOS / iPadOS Build"
                action:@selector(openFirmwarePicker)]];
+
+    [items addObject:[self makeGroup:@"APPLICATION SCOPE"]];
+
+    [items addObject:
+     [self makeSwitch:@"Global Application"
+                  key:@"GlobalProfileEnabled"
+          defaultValue:NO]];
+
+    [items addObject:
+     [self makeSwitch:@"Only In"
+                  key:@"OnlyInEnabled"
+          defaultValue:NO]];
+
+    [items addObject:
+     [self makeButton:@"Choose Applications"
+               action:@selector(openApplicationPicker)]];
 
     [items addObject:[self makeGroup:@"COMPATIBILITY"]];
 
@@ -669,7 +700,18 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 #pragma mark - Save
 
 - (void)setPreferenceValue:(id)value specifier:(PSSpecifier *)specifier {
-    [super setPreferenceValue:value specifier:specifier];
+    NSString *key = [specifier propertyForKey:@"key"];
+
+    [[self prefs] setObject:value
+                     forKey:key];
+
+    if ([key isEqualToString:@"GlobalProfileEnabled"] && [value boolValue]) {
+        [[self prefs] setBool:NO forKey:@"OnlyInEnabled"];
+    }
+
+    if ([key isEqualToString:@"OnlyInEnabled"] && [value boolValue]) {
+        [[self prefs] setBool:NO forKey:@"GlobalProfileEnabled"];
+    }
 
     [[self prefs] synchronize];
 
