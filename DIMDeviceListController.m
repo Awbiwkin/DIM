@@ -1,4 +1,3 @@
-
 #import <UIKit/UIKit.h>
 #import <Preferences/PSListController.h>
 #import <Preferences/PSSpecifier.h>
@@ -46,9 +45,12 @@ static NSString * const DIMDomain = @"com.dim.manager";
     } else {
         NSPredicate *predicate =
         [NSPredicate predicateWithBlock:^BOOL(NSDictionary *item, NSDictionary *bindings) {
-            NSString *name = item[self.displayKey] ?: @"";
-            NSString *value = item[self.valueKey] ?: @"";
-            NSString *build = item[@"build"] ?: @"";
+            NSString *name = [item[self.displayKey] isKindOfClass:NSString.class]
+                ? item[self.displayKey] : @"";
+            NSString *value = [item[self.valueKey] isKindOfClass:NSString.class]
+                ? item[self.valueKey] : @"";
+            NSString *build = [item[@"build"] isKindOfClass:NSString.class]
+                ? item[@"build"] : @"";
 
             return [name localizedCaseInsensitiveContainsString:text] ||
                    [value localizedCaseInsensitiveContainsString:text] ||
@@ -78,8 +80,10 @@ static NSString * const DIMDomain = @"com.dim.manager";
                                     forIndexPath:indexPath];
 
     NSDictionary *item = self.filteredItems[indexPath.row];
+
     cell.textLabel.text = item[self.displayKey];
     cell.textLabel.numberOfLines = 2;
+    cell.accessoryType = UITableViewCellAccessoryNone;
 
     if ([item[@"is_beta"] boolValue]) {
         cell.textLabel.textColor = UIColor.systemOrangeColor;
@@ -112,6 +116,8 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 - (void)refreshCatalog;
 - (void)openFamilyPicker;
 - (void)openDevicePicker;
+- (void)openRegionPicker;
+- (void)openModelNumberPicker;
 - (void)openFirmwarePicker;
 - (void)openApplicationPicker;
 @end
@@ -202,14 +208,118 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     return board.length ? board : @"Not available";
 }
 
-- (NSString *)modelNumbers {
-    id models = [self selectedDevice][@"models"];
+- (NSArray<NSDictionary *> *)modelVariants {
+    id variants = [self selectedDevice][@"model_variants"];
 
-    if ([models isKindOfClass:NSArray.class] && [models count] > 0) {
-        return [models componentsJoinedByString:@", "];
+    if (![variants isKindOfClass:NSArray.class]) {
+        return @[];
     }
 
-    return @"Not available";
+    NSMutableArray *result = [NSMutableArray array];
+
+    for (id entry in variants) {
+        if (![entry isKindOfClass:NSDictionary.class]) continue;
+
+        NSString *modelNumber = [entry[@"model"] isKindOfClass:NSString.class]
+            ? entry[@"model"] : nil;
+
+        NSString *region = [entry[@"region"] isKindOfClass:NSString.class]
+            ? entry[@"region"] : nil;
+
+        if (!modelNumber.length) continue;
+
+        [result addObject:@{
+            @"model": modelNumber,
+            @"region": region ?: @""
+        }];
+    }
+
+    return result;
+}
+
+- (NSArray<NSString *> *)availableRegions {
+    NSMutableSet *regions = [NSMutableSet set];
+
+    for (NSDictionary *variant in [self modelVariants]) {
+        NSString *region = variant[@"region"];
+
+        if (region.length) {
+            [regions addObject:region];
+        }
+    }
+
+    return [[regions allObjects]
+            sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+}
+
+- (NSString *)selectedRegion {
+    return [[self prefs] stringForKey:@"SelectedRegion"] ?: @"";
+}
+
+- (NSString *)selectedModelNumber {
+    return [[self prefs] stringForKey:@"SelectedModelNumber"] ?: @"";
+}
+
+- (NSArray<NSString *> *)modelNumbersForSelectedRegion {
+    NSString *selectedRegion = [self selectedRegion];
+    NSMutableSet *numbers = [NSMutableSet set];
+
+    for (NSDictionary *variant in [self modelVariants]) {
+        NSString *region = variant[@"region"];
+        NSString *modelNumber = variant[@"model"];
+
+        if (!modelNumber.length) continue;
+
+        if (selectedRegion.length) {
+            if ([region isEqualToString:selectedRegion]) {
+                [numbers addObject:modelNumber];
+            }
+        } else if (!region.length) {
+            [numbers addObject:modelNumber];
+        }
+    }
+
+    return [[numbers allObjects]
+            sortedArrayUsingSelector:@selector(localizedCaseInsensitiveCompare:)];
+}
+
+- (NSString *)regionDisplayName {
+    NSString *region = [self selectedRegion];
+    return region.length ? region : @"Not selected";
+}
+
+- (NSString *)modelNumberDisplayName {
+    NSString *number = [self selectedModelNumber];
+    return number.length ? number : @"Not selected";
+}
+
+#pragma mark - Spoofed Device Status
+
+- (BOOL)isIdentityConfigured {
+    NSUserDefaults *prefs = [self prefs];
+
+    BOOL dimEnabled = [prefs boolForKey:@"Enabled"];
+    BOOL deviceEnabled = [prefs boolForKey:@"DeviceEnabled"];
+    BOOL globalEnabled = [prefs boolForKey:@"GlobalProfileEnabled"];
+    BOOL onlyInEnabled = [prefs boolForKey:@"OnlyInEnabled"];
+
+    NSArray *selectedApps = [prefs arrayForKey:@"SelectedApps"];
+
+    BOOL hasScope = globalEnabled ||
+        (onlyInEnabled && selectedApps.count > 0);
+
+    return dimEnabled &&
+           deviceEnabled &&
+           hasScope &&
+           [self selectedModel].length > 0;
+}
+
+- (NSString *)configuredIdentityStatus {
+    if (![self isIdentityConfigured]) {
+        return @"Inactive · Check DIM, Device Identity and Application Scope";
+    }
+
+    return @"Configured · Runtime spoofing is not implemented yet";
 }
 
 #pragma mark - Specifier Helpers
@@ -345,6 +455,8 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
             [[self prefs] removeObjectForKey:@"SelectedModel"];
         }
 
+        [[self prefs] removeObjectForKey:@"SelectedRegion"];
+        [[self prefs] removeObjectForKey:@"SelectedModelNumber"];
         [[self prefs] removeObjectForKey:@"SelectedVersion"];
         [[self prefs] removeObjectForKey:@"SelectedBuild"];
 
@@ -375,6 +487,10 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
         }];
     }
 
+    [items sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [a[@"name"] localizedCaseInsensitiveCompare:b[@"name"]];
+    }];
+
     __weak typeof(self) weakSelf = self;
 
     [self presentPickerWithTitle:@"Select Device"
@@ -389,6 +505,8 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
         NSString *identifier = item[@"value"];
 
         [[self prefs] setObject:identifier forKey:@"SelectedModel"];
+        [[self prefs] removeObjectForKey:@"SelectedRegion"];
+        [[self prefs] removeObjectForKey:@"SelectedModelNumber"];
         [[self prefs] removeObjectForKey:@"SelectedVersion"];
         [[self prefs] removeObjectForKey:@"SelectedBuild"];
 
@@ -399,6 +517,89 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
          completion:^(BOOL success, NSString *message) {
             [self reloadDIMInterface];
         }];
+    }];
+}
+
+#pragma mark - Region Picker
+
+- (void)openRegionPicker {
+    NSArray<NSString *> *regions = [self availableRegions];
+
+    if (regions.count == 0) {
+        [self showMessage:
+         @"The catalog does not provide region information for this device. No country mapping will be guessed."
+                    title:@"Regions Unavailable"];
+        return;
+    }
+
+    NSMutableArray *items = [NSMutableArray array];
+
+    for (NSString *region in regions) {
+        [items addObject:@{
+            @"name": region,
+            @"value": region
+        }];
+    }
+
+    __weak typeof(self) weakSelf = self;
+
+    [self presentPickerWithTitle:@"Select Region"
+                           items:items
+                      displayKey:@"name"
+                        valueKey:@"value"
+                        selected:^(NSDictionary *item) {
+
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) return;
+
+        [[self prefs] setObject:item[@"value"] forKey:@"SelectedRegion"];
+        [[self prefs] removeObjectForKey:@"SelectedModelNumber"];
+
+        [self reloadDIMInterface];
+    }];
+}
+
+#pragma mark - Model Number Picker
+
+- (void)openModelNumberPicker {
+    if (![self selectedModel].length) {
+        [self showMessage:@"Select a device first." title:@"No Device"];
+        return;
+    }
+
+    NSArray<NSString *> *numbers = [self modelNumbersForSelectedRegion];
+
+    if (numbers.count == 0) {
+        NSString *message = [self availableRegions].count
+            ? @"Choose a region first. There are no model numbers for the selected region."
+            : @"The catalog does not provide model-number variants for this device.";
+
+        [self showMessage:message title:@"Model Numbers Unavailable"];
+        return;
+    }
+
+    NSMutableArray *items = [NSMutableArray array];
+
+    for (NSString *number in numbers) {
+        [items addObject:@{
+            @"name": number,
+            @"value": number
+        }];
+    }
+
+    __weak typeof(self) weakSelf = self;
+
+    [self presentPickerWithTitle:@"Select Model Number"
+                           items:items
+                      displayKey:@"name"
+                        valueKey:@"value"
+                        selected:^(NSDictionary *item) {
+
+        __strong typeof(weakSelf) self = weakSelf;
+        if (!self) return;
+
+        [[self prefs] setObject:item[@"value"] forKey:@"SelectedModelNumber"];
+        [self reloadDIMInterface];
     }];
 }
 
@@ -518,17 +719,12 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 
         NSString *selectedModel = [self selectedModel];
 
-        void (^finish)(NSString *) = ^(NSString *firmwareMessage) {
+        void (^finish)(NSString *) = ^(NSString *) {
             [loading dismissViewControllerAnimated:YES completion:^{
 
                 [self reloadDIMInterface];
 
                 NSString *fullMessage = message ?: @"Catalog refresh finished.";
-
-                if (firmwareMessage.length) {
-                    fullMessage = [fullMessage stringByAppendingFormat:
-                                   @"\n\n%@", firmwareMessage];
-                }
 
                 [self showMessage:fullMessage
                             title:(success ? @"Catalog Updated" : @"Catalog Update")];
@@ -539,7 +735,18 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
             [[DIMCatalogManager sharedManager]
              refreshFirmwaresForDevice:selectedModel
              completion:^(BOOL firmwareSuccess, NSString *firmwareMessage) {
-                finish(firmwareMessage);
+                NSString *combined = message ?: @"Catalog refresh finished.";
+
+                if (firmwareMessage.length) {
+                    combined = [combined stringByAppendingFormat:
+                                @"\n\n%@", firmwareMessage];
+                }
+
+                [loading dismissViewControllerAnimated:YES completion:^{
+                    [self reloadDIMInterface];
+                    [self showMessage:combined
+                                title:(success ? @"Catalog Updated" : @"Catalog Update")];
+                }];
             }];
         } else {
             finish(nil);
@@ -570,6 +777,23 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
        [self currentDeviceName],
        [DIMCatalogManager currentDeviceIdentifier]]]];
 
+    [items addObject:[self makeGroup:@"CURRENT SPOOFED DEVICE"]];
+
+    [items addObject:
+     [self makeStatus:
+      [NSString stringWithFormat:@"Configured target: %@ · %@",
+       [self selectedDeviceName],
+       model.length ? model : @"Not selected"]]];
+
+    [items addObject:
+     [self makeStatus:
+      [NSString stringWithFormat:@"Region: %@ · Model Number: %@",
+       [self regionDisplayName],
+       [self modelNumberDisplayName]]]];
+
+    [items addObject:
+     [self makeStatus:[self configuredIdentityStatus]]];
+
     [items addObject:[self makeGroup:@"SELECTED CONFIGURATION"]];
 
     [items addObject:
@@ -591,8 +815,12 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 
     [items addObject:
      [self makeStatus:
+      [NSString stringWithFormat:@"Region: %@", [self regionDisplayName]]]];
+
+    [items addObject:
+     [self makeStatus:
       [NSString stringWithFormat:@"Model Number: %@",
-       [self modelNumbers]]]];
+       [self modelNumberDisplayName]]]];
 
     [items addObject:
      [self makeButton:@"Choose Device Family"
@@ -601,6 +829,14 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     [items addObject:
      [self makeButton:@"Choose Device Model"
                action:@selector(openDevicePicker)]];
+
+    [items addObject:
+     [self makeButton:@"Choose Region"
+               action:@selector(openRegionPicker)]];
+
+    [items addObject:
+     [self makeButton:@"Choose Model Number"
+               action:@selector(openModelNumberPicker)]];
 
     [items addObject:[self makeGroup:@"OPERATING SYSTEM"]];
 
@@ -702,8 +938,7 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
 - (void)setPreferenceValue:(id)value specifier:(PSSpecifier *)specifier {
     NSString *key = [specifier propertyForKey:@"key"];
 
-    [[self prefs] setObject:value
-                     forKey:key];
+    [[self prefs] setObject:value forKey:key];
 
     if ([key isEqualToString:@"GlobalProfileEnabled"] && [value boolValue]) {
         [[self prefs] setBool:NO forKey:@"OnlyInEnabled"];
