@@ -10,6 +10,7 @@ TWEAK_NAME = DIMCore
 DIMCore_FILES = Tweak.xm
 DIMCore_CFLAGS = -fobjc-arc
 DIMCore_FRAMEWORKS = UIKit
+DIMCore_LIBRARIES = substrate
 
 include $(THEOS_MAKE_PATH)/tweak.mk
 
