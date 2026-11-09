@@ -1,19 +1,15 @@
 
 #import "DIMCatalogManager.h"
+#import <sys/types.h>
+#import <sys/sysctl.h>
 
-static NSString * const DIMCatalogDomain = @"com.dim.manager";
+static NSString * const DIMDomain = @"com.dim.manager";
 
-static NSString * const DIMIPSWDevicesURL =
-@"https://ipsw.info/api/v1/devices?format=full";
+static NSString * const DIMIPSWBase =
+@"https://ipsw.info/api/v1";
 
-static NSString * const DIMIPSWReleasesURL =
-@"https://ipsw.info/api/v1/releases";
-
-static NSString * const DIMAppleDBDevicesURL =
-@"https://api.appledb.dev/device/index.json";
-
-static NSString * const DIMAppleDBVersionsURL =
-@"https://api.appledb.dev/ios/index.json";
+static NSString * const DIMAppleDBBase =
+@"https://api.appledb.dev";
 
 @interface DIMCatalogManager ()
 @property (nonatomic, strong) NSURLSession *session;
@@ -37,9 +33,9 @@ static NSString * const DIMAppleDBVersionsURL =
 
     if (self) {
         NSURLSessionConfiguration *configuration =
-        [NSURLSessionConfiguration ephemeralSessionConfiguration];
+        [NSURLSessionConfiguration defaultSessionConfiguration];
 
-        configuration.timeoutIntervalForRequest = 35;
+        configuration.timeoutIntervalForRequest = 30;
         configuration.timeoutIntervalForResource = 60;
         configuration.HTTPMaximumConnectionsPerHost = 4;
 
@@ -50,260 +46,50 @@ static NSString * const DIMAppleDBVersionsURL =
     return self;
 }
 
-- (NSUserDefaults *)preferences {
-    return [[NSUserDefaults alloc] initWithSuiteName:DIMCatalogDomain];
+- (NSUserDefaults *)prefs {
+    return [[NSUserDefaults alloc] initWithSuiteName:DIMDomain];
 }
 
-- (NSArray<NSDictionary *> *)devicesForFamily:(NSString *)family {
-    NSArray *devices =
-    [[self preferences] arrayForKey:@"DIMCatalogDevices"];
+#pragma mark - Device Detection
 
-    if (![devices isKindOfClass:[NSArray class]]) {
-        return @[];
++ (NSString *)currentDeviceIdentifier {
+    size_t size = 0;
+
+    sysctlbyname("hw.machine", NULL, &size, NULL, 0);
+
+    if (size == 0) {
+        return @"";
     }
 
-    NSPredicate *predicate =
-    [NSPredicate predicateWithBlock:^BOOL(NSDictionary *device, NSDictionary *bindings) {
-        return [device[@"product_type"] isEqualToString:family];
-    }];
+    char *machine = malloc(size);
 
-    NSArray *filtered = [devices filteredArrayUsingPredicate:predicate];
+    if (!machine) {
+        return @"";
+    }
 
-    return [filtered sortedArrayUsingComparator:^NSComparisonResult(
-        NSDictionary *a, NSDictionary *b) {
-        return [a[@"name"] localizedStandardCompare:b[@"name"]];
-    }];
+    NSString *identifier = @"";
+
+    if (sysctlbyname("hw.machine", machine, &size, NULL, 0) == 0) {
+        identifier =
+        [NSString stringWithUTF8String:machine] ?: @"";
+    }
+
+    free(machine);
+
+    return identifier;
 }
 
-- (NSArray<NSDictionary *> *)versionsForFamily:(NSString *)family {
-    NSString *osFamily =
-    [family isEqualToString:@"iPad"] ? @"iPadOS" : @"iOS";
++ (NSString *)currentDeviceFamily {
+    NSString *identifier = [self currentDeviceIdentifier];
 
-    NSArray *versions =
-    [[self preferences] arrayForKey:@"DIMCatalogVersions"];
-
-    if (![versions isKindOfClass:[NSArray class]]) {
-        return @[];
+    if ([identifier hasPrefix:@"iPad"]) {
+        return @"iPad";
     }
 
-    NSPredicate *predicate =
-    [NSPredicate predicateWithBlock:^BOOL(NSDictionary *item, NSDictionary *bindings) {
-        return [item[@"family"] isEqualToString:osFamily];
-    }];
-
-    NSArray *filtered = [versions filteredArrayUsingPredicate:predicate];
-
-    return [filtered sortedArrayUsingComparator:^NSComparisonResult(
-        NSDictionary *a, NSDictionary *b) {
-        return [b[@"version"] compare:a[@"version"]
-                              options:NSNumericSearch];
-    }];
+    return @"iPhone";
 }
 
-- (NSDate *)lastUpdateDate {
-    return [[self preferences] objectForKey:@"DIMCatalogLastUpdated"];
-}
-
-- (NSString *)catalogStatus {
-    return [[self preferences] stringForKey:@"DIMCatalogStatus"]
-        ?: @"Catalog has not been updated yet.";
-}
-
-- (NSDictionary *)deviceDictionaryFromObject:(id)object {
-    if (![object isKindOfClass:[NSDictionary class]]) {
-        return nil;
-    }
-
-    NSDictionary *source = object;
-
-    NSString *name = source[@"name"];
-    NSString *identifier = source[@"identifier"];
-    NSString *type = source[@"product_type"];
-
-    if (![name isKindOfClass:[NSString class]] ||
-        ![identifier isKindOfClass:[NSString class]] ||
-        ![type isKindOfClass:[NSString class]]) {
-        return nil;
-    }
-
-    if (![type isEqualToString:@"iPhone"] &&
-        ![type isEqualToString:@"iPad"]) {
-        return nil;
-    }
-
-    NSMutableDictionary *result = [NSMutableDictionary dictionary];
-
-    result[@"name"] = name;
-    result[@"identifier"] = identifier;
-    result[@"product_type"] = type;
-
-    if ([source[@"boardconfig"] isKindOfClass:[NSString class]]) {
-        result[@"boardconfig"] = source[@"boardconfig"];
-    }
-
-    if ([source[@"models"] isKindOfClass:[NSArray class]]) {
-        result[@"models"] = source[@"models"];
-    }
-
-    if ([source[@"introduction"] isKindOfClass:[NSString class]]) {
-        result[@"introduction"] = source[@"introduction"];
-    }
-
-    if ([source[@"launch_os_version"] isKindOfClass:[NSString class]]) {
-        result[@"launch_os_version"] = source[@"launch_os_version"];
-    }
-
-    return result;
-}
-
-- (NSString *)versionFromOperatingSystemName:(NSString *)name {
-    if (![name isKindOfClass:[NSString class]]) {
-        return nil;
-    }
-
-    NSError *error = nil;
-
-    NSRegularExpression *regex =
-    [NSRegularExpression regularExpressionWithPattern:
-     @"[0-9]+(?:\\.[0-9]+){0,3}"
-                                              options:0
-                                                error:&error];
-
-    NSTextCheckingResult *match =
-    [regex firstMatchInString:name
-                      options:0
-                        range:NSMakeRange(0, name.length)];
-
-    if (!match) {
-        return nil;
-    }
-
-    return [name substringWithRange:match.range];
-}
-
-- (void)addVersion:(NSString *)version
-              build:(NSString *)build
-             family:(NSString *)family
-            toArray:(NSMutableArray *)array
-             unique:(NSMutableSet *)unique {
-
-    if (version.length == 0 || family.length == 0) {
-        return;
-    }
-
-    NSString *safeBuild =
-    [build isKindOfClass:[NSString class]] ? build : @"";
-
-    NSString *key =
-    [NSString stringWithFormat:@"%@|%@|%@", family, version, safeBuild];
-
-    if ([unique containsObject:key]) {
-        return;
-    }
-
-    [unique addObject:key];
-
-    [array addObject:@{
-        @"family": family,
-        @"version": version,
-        @"build": safeBuild
-    }];
-}
-
-- (void)parseAppleDBVersionIndex:(id)json
-                         toArray:(NSMutableArray *)versions
-                          unique:(NSMutableSet *)unique {
-
-    if (![json isKindOfClass:[NSArray class]]) {
-        return;
-    }
-
-    for (id entry in (NSArray *)json) {
-        if (![entry isKindOfClass:[NSString class]]) {
-            continue;
-        }
-
-        NSArray *parts = [entry componentsSeparatedByString:@";"];
-
-        if (parts.count < 2) {
-            continue;
-        }
-
-        NSString *osName = parts[0];
-        NSString *build = parts[1];
-
-        NSString *family = nil;
-
-        if ([osName localizedCaseInsensitiveContainsString:@"iPadOS"]) {
-            family = @"iPadOS";
-        } else if ([osName localizedCaseInsensitiveContainsString:@"iOS"]) {
-            family = @"iOS";
-        }
-
-        if (!family) {
-            continue;
-        }
-
-        NSString *version =
-        [self versionFromOperatingSystemName:osName];
-
-        if (!version) {
-            continue;
-        }
-
-        [self addVersion:version
-                   build:build
-                  family:family
-                 toArray:versions
-                  unique:unique];
-    }
-}
-
-- (void)parseIPSWReleases:(id)json
-                  toArray:(NSMutableArray *)versions
-                   unique:(NSMutableSet *)unique {
-
-    if (![json isKindOfClass:[NSArray class]]) {
-        return;
-    }
-
-    for (id entry in (NSArray *)json) {
-        if (![entry isKindOfClass:[NSDictionary class]]) {
-            continue;
-        }
-
-        NSString *name = entry[@"name"];
-
-        if (![name isKindOfClass:[NSString class]]) {
-            continue;
-        }
-
-        NSString *family = nil;
-
-        if ([name localizedCaseInsensitiveContainsString:@"iPadOS"]) {
-            family = @"iPadOS";
-        } else if ([name localizedCaseInsensitiveContainsString:@"iOS"]) {
-            family = @"iOS";
-        }
-
-        if (!family) {
-            continue;
-        }
-
-        NSString *version =
-        [self versionFromOperatingSystemName:name];
-
-        if (!version) {
-            continue;
-        }
-
-        [self addVersion:version
-                   build:@""
-                  family:family
-                 toArray:versions
-                  unique:unique];
-    }
-}
+#pragma mark - HTTP
 
 - (void)requestURL:(NSString *)url
         completion:(void (^)(id json, BOOL success))completion {
@@ -319,7 +105,10 @@ static NSString * const DIMAppleDBVersionsURL =
     [NSMutableURLRequest requestWithURL:URL];
 
     request.HTTPMethod = @"GET";
-    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
+    request.timeoutInterval = 30;
+
+    [request setValue:@"application/json"
+   forHTTPHeaderField:@"Accept"];
 
     NSURLSessionDataTask *task =
     [self.session dataTaskWithRequest:request
@@ -327,19 +116,23 @@ static NSString * const DIMAppleDBVersionsURL =
                                         NSURLResponse *response,
                                         NSError *error) {
 
-        NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
+        NSHTTPURLResponse *http =
+        (NSHTTPURLResponse *)response;
 
-        if (error || !data || http.statusCode < 200 ||
+        if (error || !data ||
+            http.statusCode < 200 ||
             http.statusCode >= 300) {
+
             completion(nil, NO);
             return;
         }
 
         NSError *jsonError = nil;
 
-        id json = [NSJSONSerialization JSONObjectWithData:data
-                                                  options:NSJSONReadingFragmentsAllowed
-                                                    error:&jsonError];
+        id json =
+        [NSJSONSerialization JSONObjectWithData:data
+                                        options:NSJSONReadingFragmentsAllowed
+                                          error:&jsonError];
 
         if (jsonError || !json) {
             completion(nil, NO);
@@ -352,53 +145,303 @@ static NSString * const DIMAppleDBVersionsURL =
     [task resume];
 }
 
+#pragma mark - Device Catalog
+
+- (NSArray<NSDictionary *> *)devicesForFamily:(NSString *)family {
+    NSArray *devices =
+    [[self prefs] arrayForKey:@"DIMCatalogDevices"];
+
+    if (![devices isKindOfClass:[NSArray class]]) {
+        return @[];
+    }
+
+    NSMutableArray *result = [NSMutableArray array];
+
+    for (NSDictionary *device in devices) {
+        if (![device isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+
+        if ([device[@"product_type"] isEqualToString:family]) {
+            [result addObject:device];
+        }
+    }
+
+    return [result sortedArrayUsingComparator:
+    ^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [a[@"name"] localizedStandardCompare:b[@"name"]];
+    }];
+}
+
+- (NSDictionary *)deviceForIdentifier:(NSString *)identifier {
+    if (identifier.length == 0) {
+        return nil;
+    }
+
+    NSArray *devices =
+    [[self prefs] arrayForKey:@"DIMCatalogDevices"];
+
+    for (NSDictionary *device in devices) {
+        if ([device[@"identifier"] isEqualToString:identifier]) {
+            return device;
+        }
+    }
+
+    return nil;
+}
+
+#pragma mark - Firmware Catalog
+
+- (NSString *)firmwareCacheKey:(NSString *)identifier {
+    NSString *safe =
+    [identifier stringByReplacingOccurrencesOfString:@","
+                                           withString:@"_"];
+
+    return [@"DIMFirmware_" stringByAppendingString:safe];
+}
+
+- (NSArray<NSDictionary *> *)firmwaresForDevice:(NSString *)identifier {
+    if (identifier.length == 0) {
+        return @[];
+    }
+
+    NSArray *firmwares =
+    [[self prefs] arrayForKey:[self firmwareCacheKey:identifier]];
+
+    return [firmwares isKindOfClass:[NSArray class]] ? firmwares : @[];
+}
+
+- (void)refreshFirmwaresForDevice:(NSString *)identifier
+                       completion:(void (^)(BOOL success, NSString *message))completion {
+
+    if (identifier.length == 0) {
+        if (completion) {
+            completion(NO, @"Invalid device identifier.");
+        }
+        return;
+    }
+
+    NSString *escaped =
+    [identifier stringByAddingPercentEncodingWithAllowedCharacters:
+     [NSCharacterSet URLPathAllowedCharacterSet]];
+
+    NSString *url =
+    [NSString stringWithFormat:@"%@/device/%@", DIMIPSWBase, escaped];
+
+    [self requestURL:url completion:^(id json, BOOL success) {
+
+        if (!success || ![json isKindOfClass:[NSDictionary class]]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                if (completion) {
+                    completion(NO, @"Could not load firmware data. Existing cache was preserved.");
+                }
+            });
+            return;
+        }
+
+        NSArray *source = json[@"firmwares"];
+
+        if (![source isKindOfClass:[NSArray class]]) {
+            source = @[];
+        }
+
+        NSMutableArray *result = [NSMutableArray array];
+
+        for (NSDictionary *firmware in source) {
+            if (![firmware isKindOfClass:[NSDictionary class]]) {
+                continue;
+            }
+
+            NSString *version = firmware[@"version"];
+            NSString *build = firmware[@"buildid"];
+
+            if (![version isKindOfClass:[NSString class]] ||
+                ![build isKindOfClass:[NSString class]]) {
+                continue;
+            }
+
+            NSMutableDictionary *entry =
+            [NSMutableDictionary dictionary];
+
+            entry[@"version"] = version;
+            entry[@"build"] = build;
+
+            if ([firmware[@"signed"] respondsToSelector:@selector(boolValue)]) {
+                entry[@"signed"] = firmware[@"signed"];
+            }
+
+            if ([firmware[@"releasedate"] isKindOfClass:[NSString class]]) {
+                entry[@"release_date"] = firmware[@"releasedate"];
+            }
+
+            if ([firmware[@"url"] isKindOfClass:[NSString class]]) {
+                entry[@"url"] = firmware[@"url"];
+            }
+
+            [result addObject:entry];
+        }
+
+        [result sortUsingComparator:
+         ^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+
+            NSString *versionA = a[@"version"] ?: @"";
+            NSString *versionB = b[@"version"] ?: @"";
+
+            NSComparisonResult comparison =
+            [versionB compare:versionA options:NSNumericSearch];
+
+            if (comparison == NSOrderedSame) {
+                return [b[@"build"] compare:a[@"build"]
+                                    options:NSNumericSearch];
+            }
+
+            return comparison;
+        }];
+
+        NSUserDefaults *prefs = [self prefs];
+
+        [prefs setObject:result
+                  forKey:[self firmwareCacheKey:identifier]];
+
+        [prefs synchronize];
+
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (completion) {
+                completion(YES,
+                    [NSString stringWithFormat:
+                     @"Loaded %lu firmware builds for %@.",
+                     (unsigned long)result.count,
+                     identifier]);
+            }
+        });
+    }];
+}
+
+#pragma mark - AppleDB Version Index
+
+- (NSArray<NSDictionary *> *)versionsForFamily:(NSString *)family {
+    NSString *osType =
+    [family isEqualToString:@"iPad"] ? @"iPadOS" : @"iOS";
+
+    NSString *key =
+    [osType isEqualToString:@"iPadOS"]
+    ? @"DIMAppleDB_iPadOS"
+    : @"DIMAppleDB_iOS";
+
+    NSArray *versions = [[self prefs] arrayForKey:key];
+
+    return [versions isKindOfClass:[NSArray class]] ? versions : @[];
+}
+
+- (NSArray *)parseAppleDBIndex:(id)json osType:(NSString *)osType {
+    if (![json isKindOfClass:[NSArray class]]) {
+        return @[];
+    }
+
+    NSMutableDictionary *unique = [NSMutableDictionary dictionary];
+
+    for (id item in (NSArray *)json) {
+        if (![item isKindOfClass:[NSString class]]) {
+            continue;
+        }
+
+        NSArray *parts = [item componentsSeparatedByString:@";"];
+
+        if (parts.count < 2) {
+            continue;
+        }
+
+        NSString *name = parts[0];
+        NSString *build = parts[1];
+
+        NSString *prefix =
+        [osType stringByAppendingString:@" "];
+
+        if (![name hasPrefix:prefix]) {
+            continue;
+        }
+
+        NSString *version =
+        [name substringFromIndex:prefix.length];
+
+        if (version.length == 0 || build.length == 0) {
+            continue;
+        }
+
+        NSString *key =
+        [NSString stringWithFormat:@"%@|%@", version, build];
+
+        unique[key] = @{
+            @"version": version,
+            @"build": build
+        };
+    }
+
+    NSArray *result = [unique allValues];
+
+    return [result sortedArrayUsingComparator:
+    ^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [b[@"version"] compare:a[@"version"]
+                              options:NSNumericSearch];
+    }];
+}
+
+#pragma mark - Full Catalog Refresh
+
 - (void)refreshCatalogWithCompletion:
 (void (^)(BOOL success, NSString *message))completion {
 
     dispatch_group_t group = dispatch_group_create();
 
-    __block id ipswDevices = nil;
-    __block id ipswReleases = nil;
-    __block id appleDevices = nil;
-    __block id appleVersions = nil;
+    __block id iPhoneDevices = nil;
+    __block id iPadDevices = nil;
+    __block id iOSIndex = nil;
+    __block id iPadOSIndex = nil;
 
-    __block BOOL ipswDevicesOK = NO;
-    __block BOOL ipswReleasesOK = NO;
-    __block BOOL appleDevicesOK = NO;
-    __block BOOL appleVersionsOK = NO;
+    __block BOOL iPhoneOK = NO;
+    __block BOOL iPadOK = NO;
+    __block BOOL iOSOK = NO;
+    __block BOOL iPadOSOK = NO;
 
     NSArray *urls = @[
-        DIMIPSWDevicesURL,
-        DIMIPSWReleasesURL,
-        DIMAppleDBDevicesURL,
-        DIMAppleDBVersionsURL
+        [NSString stringWithFormat:
+         @"%@/devices?type=iPhone&format=full", DIMIPSWBase],
+
+        [NSString stringWithFormat:
+         @"%@/devices?type=iPad&format=full", DIMIPSWBase],
+
+        [NSString stringWithFormat:
+         @"%@/ios/iOS/index.json", DIMAppleDBBase],
+
+        [NSString stringWithFormat:
+         @"%@/ios/iPadOS/index.json", DIMAppleDBBase]
     ];
 
-    for (NSUInteger index = 0; index < urls.count; index++) {
+    for (NSUInteger i = 0; i < urls.count; i++) {
         dispatch_group_enter(group);
 
-        [self requestURL:urls[index]
+        [self requestURL:urls[i]
               completion:^(id json, BOOL success) {
 
-            switch (index) {
+            switch (i) {
                 case 0:
-                    ipswDevices = json;
-                    ipswDevicesOK = success;
+                    iPhoneDevices = json;
+                    iPhoneOK = success;
                     break;
 
                 case 1:
-                    ipswReleases = json;
-                    ipswReleasesOK = success;
+                    iPadDevices = json;
+                    iPadOK = success;
                     break;
 
                 case 2:
-                    appleDevices = json;
-                    appleDevicesOK = success;
+                    iOSIndex = json;
+                    iOSOK = success;
                     break;
 
                 case 3:
-                    appleVersions = json;
-                    appleVersionsOK = success;
+                    iPadOSIndex = json;
+                    iPadOSOK = success;
                     break;
             }
 
@@ -408,75 +451,112 @@ static NSString * const DIMAppleDBVersionsURL =
 
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
 
-        NSUserDefaults *prefs = [self preferences];
-
-        BOOL hasUsefulData = NO;
+        NSUserDefaults *prefs = [self prefs];
 
         NSMutableArray *devices = [NSMutableArray array];
-        NSMutableArray *versions = [NSMutableArray array];
-        NSMutableSet *versionKeys = [NSMutableSet set];
 
-        if (ipswDevicesOK && [ipswDevices isKindOfClass:[NSArray class]]) {
-            for (id item in (NSArray *)ipswDevices) {
-                NSDictionary *device = [self deviceDictionaryFromObject:item];
+        NSArray *deviceSources = @[
+            iPhoneDevices ?: [NSNull null],
+            iPadDevices ?: [NSNull null]
+        ];
 
-                if (device) {
-                    [devices addObject:device];
+        for (id source in deviceSources) {
+            if (![source isKindOfClass:[NSArray class]]) {
+                continue;
+            }
+
+            for (NSDictionary *item in (NSArray *)source) {
+                if (![item isKindOfClass:[NSDictionary class]]) {
+                    continue;
                 }
+
+                NSString *name = item[@"name"];
+                NSString *identifier = item[@"identifier"];
+                NSString *type = item[@"product_type"];
+
+                if (![name isKindOfClass:[NSString class]] ||
+                    ![identifier isKindOfClass:[NSString class]] ||
+                    ![type isKindOfClass:[NSString class]]) {
+                    continue;
+                }
+
+                if (![type isEqualToString:@"iPhone"] &&
+                    ![type isEqualToString:@"iPad"]) {
+                    continue;
+                }
+
+                NSMutableDictionary *device =
+                [NSMutableDictionary dictionary];
+
+                device[@"name"] = name;
+                device[@"identifier"] = identifier;
+                device[@"product_type"] = type;
+
+                NSArray *copyKeys = @[
+                    @"boardconfig",
+                    @"models",
+                    @"introduction",
+                    @"launch_os_version",
+                    @"apple_cpu",
+                    @"screen",
+                    @"cellular"
+                ];
+
+                for (NSString *key in copyKeys) {
+                    id value = item[key];
+
+                    if (value && value != [NSNull null]) {
+                        device[key] = value;
+                    }
+                }
+
+                [devices addObject:device];
             }
-
-            if (devices.count > 0) {
-                [prefs setObject:devices forKey:@"DIMCatalogDevices"];
-                hasUsefulData = YES;
-            }
         }
 
-        if (appleVersionsOK) {
-            [self parseAppleDBVersionIndex:appleVersions
-                                   toArray:versions
-                                    unique:versionKeys];
-
-            if (versions.count > 0) {
-                hasUsefulData = YES;
-            }
+        if (devices.count > 0) {
+            [prefs setObject:devices
+                      forKey:@"DIMCatalogDevices"];
         }
 
-        if (ipswReleasesOK) {
-            [self parseIPSWReleases:ipswReleases
-                            toArray:versions
-                             unique:versionKeys];
+        NSArray *iosVersions =
+        iOSOK ? [self parseAppleDBIndex:iOSIndex osType:@"iOS"] : nil;
 
-            if (versions.count > 0) {
-                hasUsefulData = YES;
-            }
+        NSArray *ipadosVersions =
+        iPadOSOK ? [self parseAppleDBIndex:iPadOSIndex osType:@"iPadOS"] : nil;
+
+        if (iosVersions.count > 0) {
+            [prefs setObject:iosVersions forKey:@"DIMAppleDB_iOS"];
         }
 
-        if (versions.count > 0) {
-            [prefs setObject:versions forKey:@"DIMCatalogVersions"];
+        if (ipadosVersions.count > 0) {
+            [prefs setObject:ipadosVersions forKey:@"DIMAppleDB_iPadOS"];
         }
 
-        if (appleDevicesOK && [appleDevices isKindOfClass:[NSArray class]]) {
-            [prefs setObject:appleDevices
-                      forKey:@"DIMAppleDBDeviceIndex"];
-            hasUsefulData = YES;
-        }
+        NSDictionary *sourceStatus = @{
+            @"IPSW_iPhone": @(iPhoneOK),
+            @"IPSW_iPad": @(iPadOK),
+            @"AppleDB_iOS": @(iOSOK),
+            @"AppleDB_iPadOS": @(iPadOSOK)
+        };
 
-        [prefs setObject:@{
-            @"IPSWDevices": @(ipswDevicesOK),
-            @"IPSWReleases": @(ipswReleasesOK),
-            @"AppleDBDevices": @(appleDevicesOK),
-            @"AppleDBVersions": @(appleVersionsOK)
-        } forKey:@"DIMCatalogSourceStatus"];
+        [prefs setObject:sourceStatus forKey:@"DIMCatalogSourceStatus"];
 
-        if (hasUsefulData) {
+        BOOL hasData =
+        devices.count > 0 ||
+        iosVersions.count > 0 ||
+        ipadosVersions.count > 0;
+
+        if (hasData) {
             [prefs setObject:[NSDate date]
                       forKey:@"DIMCatalogLastUpdated"];
 
             NSString *message =
             [NSString stringWithFormat:
-             @"Updated: %lu devices, %lu OS builds.",
+             @"Devices: %lu. iOS builds: %lu. iPadOS builds: %lu.",
              (unsigned long)[[prefs arrayForKey:@"DIMCatalogDevices"] count],
-             (unsigned long)[[prefs arrayForKey:@"DIMCatalogVersions"] count]];
+             (unsigned long)[[prefs arrayForKey:@"DIMAppleDB_iOS"] count],
+             (unsigned long)[[prefs arrayForKey:@"DIMAppleDB_iPadOS"] count]];
 
             [prefs setObject:message forKey:@"DIMCatalogStatus"];
             [prefs synchronize];
@@ -487,7 +567,7 @@ static NSString * const DIMAppleDBVersionsURL =
 
         } else {
             NSString *message =
-            @"Update failed. Previous cached catalog was preserved.";
+            @"All catalog sources failed. Previous cache was preserved.";
 
             [prefs setObject:message forKey:@"DIMCatalogStatus"];
             [prefs synchronize];
@@ -497,6 +577,17 @@ static NSString * const DIMAppleDBVersionsURL =
             }
         }
     });
+}
+
+#pragma mark - Status
+
+- (NSDate *)lastUpdateDate {
+    return [[self prefs] objectForKey:@"DIMCatalogLastUpdated"];
+}
+
+- (NSString *)catalogStatus {
+    return [[self prefs] stringForKey:@"DIMCatalogStatus"]
+    ?: @"Catalog has not been updated yet.";
 }
 
 @end
