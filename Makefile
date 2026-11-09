@@ -20,6 +20,6 @@ DeviceIdentityManager_FRAMEWORKS = UIKit CoreLocation CoreGraphics SystemConfigu
 
 include $(THEOS_MAKEFILE_PATH)/tweak.mk
 
-# Используем прямой путь через $(THEOS) вместо THEOS_MAKEFILE_PATH для сабпроектов
+# Обращаемся напрямую к $(THEOS) для подключения сабпроекта
 SUBPROJECTS += Preferences
 include $(THEOS)/makefiles/aggregate.mk
