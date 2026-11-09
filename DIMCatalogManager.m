@@ -17,28 +17,22 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
 + (instancetype)sharedManager {
     static DIMCatalogManager *manager;
     static dispatch_once_t onceToken;
-
     dispatch_once(&onceToken, ^{
         manager = [[DIMCatalogManager alloc] init];
     });
-
     return manager;
 }
 
 - (instancetype)init {
     self = [super init];
-
     if (self) {
         NSURLSessionConfiguration *configuration =
         [NSURLSessionConfiguration defaultSessionConfiguration];
-
         configuration.timeoutIntervalForRequest = 45;
         configuration.timeoutIntervalForResource = 120;
         configuration.HTTPMaximumConnectionsPerHost = 4;
-
         _session = [NSURLSession sessionWithConfiguration:configuration];
     }
-
     return self;
 }
 
@@ -51,25 +45,24 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
 + (NSString *)currentDeviceIdentifier {
     size_t size = 0;
     sysctlbyname("hw.machine", NULL, &size, NULL, 0);
-
     if (size == 0) return @"";
 
     char *machine = malloc(size);
     if (!machine) return @"";
 
     NSString *identifier = @"";
-
     if (sysctlbyname("hw.machine", machine, &size, NULL, 0) == 0) {
         identifier = [NSString stringWithUTF8String:machine] ?: @"";
     }
-
     free(machine);
     return identifier;
 }
 
 + (NSString *)currentDeviceFamily {
-    return [[self currentDeviceIdentifier] hasPrefix:@"iPad"]
-        ? @"iPad" : @"iPhone";
+    NSString *identifier = [self currentDeviceIdentifier];
+    if ([identifier hasPrefix:@"iPad"]) return @"iPad";
+    if ([identifier hasPrefix:@"iPhone"]) return @"iPhone";
+    return @"iPhone";
 }
 
 #pragma mark - HTTP
@@ -78,7 +71,6 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
         completion:(void (^)(id json, BOOL success, NSString *error))completion {
 
     NSURL *URL = [NSURL URLWithString:url];
-
     if (!URL) {
         if (completion) completion(nil, NO, @"Invalid URL");
         return;
@@ -86,19 +78,15 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
 
     NSMutableURLRequest *request =
     [NSMutableURLRequest requestWithURL:URL];
-
     request.HTTPMethod = @"GET";
     request.timeoutInterval = 60;
-
-    [request setValue:@"application/json"
-   forHTTPHeaderField:@"Accept"];
+    [request setValue:@"application/json" forHTTPHeaderField:@"Accept"];
 
     NSURLSessionDataTask *task =
     [self.session dataTaskWithRequest:request
                     completionHandler:^(NSData *data,
                                         NSURLResponse *response,
                                         NSError *error) {
-
         NSHTTPURLResponse *http = (NSHTTPURLResponse *)response;
 
         if (error) {
@@ -108,19 +96,15 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
 
         if (!data || http.statusCode < 200 || http.statusCode >= 300) {
             NSString *message =
-            [NSString stringWithFormat:@"HTTP %ld",
-             (long)http.statusCode];
-
+            [NSString stringWithFormat:@"HTTP %ld", (long)http.statusCode];
             if (completion) completion(nil, NO, message);
             return;
         }
 
         NSError *jsonError = nil;
-
-        id json =
-        [NSJSONSerialization JSONObjectWithData:data
-                                        options:NSJSONReadingFragmentsAllowed
-                                          error:&jsonError];
+        id json = [NSJSONSerialization JSONObjectWithData:data
+                                                   options:NSJSONReadingFragmentsAllowed
+                                                     error:&jsonError];
 
         if (jsonError || !json) {
             if (completion) {
@@ -137,20 +121,19 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
 }
 
 - (NSString *)escapedPath:(NSString *)value {
-    return [value stringByAddingPercentEncodingWithAllowedCharacters:
-            [NSCharacterSet URLPathAllowedCharacterSet]] ?: value;
+    NSCharacterSet *allowed =
+    [NSCharacterSet characterSetWithCharactersInString:
+     @"abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-._~"];
+
+    return [value stringByAddingPercentEncodingWithAllowedCharacters:allowed]
+        ?: value;
 }
 
 #pragma mark - JSON Helpers
 
 - (NSArray *)arrayFromJSON:(id)json {
-    if ([json isKindOfClass:[NSArray class]]) {
-        return json;
-    }
-
-    if (![json isKindOfClass:[NSDictionary class]]) {
-        return @[];
-    }
+    if ([json isKindOfClass:NSArray.class]) return json;
+    if (![json isKindOfClass:NSDictionary.class]) return @[];
 
     NSDictionary *dictionary = json;
 
@@ -159,20 +142,20 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
         @"items", @"results", @"versions"
     ]) {
         id value = dictionary[key];
-
-        if ([value isKindOfClass:[NSArray class]]) {
-            return value;
-        }
+        if ([value isKindOfClass:NSArray.class]) return value;
     }
 
     return @[];
 }
 
 - (NSString *)stringValue:(id)value {
-    if ([value isKindOfClass:[NSString class]]) return value;
+    if (!value || value == [NSNull null]) return nil;
+    if ([value isKindOfClass:NSString.class]) return value;
+
     if ([value respondsToSelector:@selector(stringValue)]) {
         return [value stringValue];
     }
+
     return nil;
 }
 
@@ -180,7 +163,7 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
                        keys:(NSArray<NSString *> *)keys {
     for (NSString *key in keys) {
         NSString *value = [self stringValue:dictionary[key]];
-        if (value.length > 0) return value;
+        if (value.length) return value;
     }
     return nil;
 }
@@ -190,12 +173,13 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
              fallback:(BOOL)fallback {
     for (NSString *key in keys) {
         id value = dictionary[key];
+        if (!value || value == [NSNull null]) continue;
 
         if ([value respondsToSelector:@selector(boolValue)]) {
             return [value boolValue];
         }
 
-        if ([value isKindOfClass:[NSString class]]) {
+        if ([value isKindOfClass:NSString.class]) {
             NSString *lower = [value lowercaseString];
 
             if ([lower isEqualToString:@"true"] ||
@@ -206,62 +190,200 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
                 [lower isEqualToString:@"no"]) return NO;
         }
     }
-
     return fallback;
+}
+
+- (NSArray *)stringArrayFromValue:(id)value {
+    if (!value || value == [NSNull null]) return @[];
+
+    if ([value isKindOfClass:NSString.class]) {
+        return [value length] ? @[value] : @[];
+    }
+
+    if (![value isKindOfClass:NSArray.class]) return @[];
+
+    NSMutableArray *result = [NSMutableArray array];
+
+    for (id item in (NSArray *)value) {
+        if ([item isKindOfClass:NSString.class] && [item length]) {
+            [result addObject:item];
+        } else if ([item isKindOfClass:NSDictionary.class]) {
+            NSString *candidate =
+            [self firstStringIn:item
+                           keys:@[@"identifier", @"key", @"device",
+                                  @"productType", @"product_type",
+                                  @"model", @"number"]];
+            if (candidate.length) [result addObject:candidate];
+        }
+    }
+
+    return result;
+}
+
+- (NSString *)deviceIdentifierFromRecord:(NSDictionary *)record {
+    id raw = record[@"identifier"];
+
+    if ([raw isKindOfClass:NSString.class] && [raw length]) {
+        return raw;
+    }
+
+    if ([raw isKindOfClass:NSArray.class]) {
+        for (id candidate in raw) {
+            if ([candidate isKindOfClass:NSString.class] &&
+                ([candidate hasPrefix:@"iPhone"] ||
+                 [candidate hasPrefix:@"iPad"])) {
+                return candidate;
+            }
+        }
+    }
+
+    return [self firstStringIn:record
+                          keys:@[@"key", @"device", @"productType",
+                                 @"product_type", @"deviceIdentifier"]];
+}
+
+- (NSString *)familyForIdentifier:(NSString *)identifier {
+    if ([identifier hasPrefix:@"iPhone"]) return @"iPhone";
+    if ([identifier hasPrefix:@"iPad"]) return @"iPad";
+    return nil;
+}
+
+#pragma mark - Model Number / Region Parsing
+
+- (void)appendModelValue:(id)value
+                 region:(NSString *)inheritedRegion
+                 toList:(NSMutableArray *)list {
+
+    if (!value || value == [NSNull null]) return;
+
+    if ([value isKindOfClass:NSString.class]) {
+        NSString *model = [value stringByTrimmingCharactersInSet:
+                           NSCharacterSet.whitespaceAndNewlineCharacterSet];
+
+        if (!model.length) return;
+
+        NSDictionary *entry = @{
+            @"model": model,
+            @"region": inheritedRegion.length ? inheritedRegion : @""
+        };
+
+        if (![list containsObject:entry]) [list addObject:entry];
+        return;
+    }
+
+    if ([value isKindOfClass:NSArray.class]) {
+        for (id item in (NSArray *)value) {
+            [self appendModelValue:item region:inheritedRegion toList:list];
+        }
+        return;
+    }
+
+    if (![value isKindOfClass:NSDictionary.class]) return;
+
+    NSDictionary *dictionary = value;
+
+    NSString *model =
+    [self firstStringIn:dictionary
+                   keys:@[@"modelNumber", @"model_number", @"number",
+                          @"identifier", @"partNumber", @"part_number",
+                          @"model", @"value", @"sku"]];
+
+    NSString *region =
+    [self firstStringIn:dictionary
+                   keys:@[@"region", @"market", @"country",
+                          @"salesRegion", @"sales_region",
+                          @"variant", @"distribution"]];
+
+    if (!region.length) region = inheritedRegion;
+
+    if (model.length) {
+        NSDictionary *entry = @{
+            @"model": model,
+            @"region": region ?: @""
+        };
+
+        if (![list containsObject:entry]) [list addObject:entry];
+    } else {
+        for (NSString *key in dictionary) {
+            id nested = dictionary[key];
+
+            if ([nested isKindOfClass:NSArray.class] ||
+                [nested isKindOfClass:NSDictionary.class]) {
+                [self appendModelValue:nested
+                               region:(region.length ? region : key)
+                               toList:list];
+            }
+        }
+    }
+}
+
+- (NSArray *)modelVariantsFromRecord:(NSDictionary *)record {
+    NSMutableArray *result = [NSMutableArray array];
+
+    for (NSString *key in @[
+        @"models", @"modelNumbers", @"model_numbers",
+        @"model", @"modelNumber", @"model_number",
+        @"partNumbers", @"part_numbers", @"sku"
+    ]) {
+        id value = record[key];
+        if (value && value != [NSNull null]) {
+            [self appendModelValue:value region:nil toList:result];
+        }
+    }
+
+    return result;
+}
+
+- (NSArray *)uniqueModelNumbersFromVariants:(NSArray *)variants {
+    NSMutableOrderedSet *numbers = [NSMutableOrderedSet orderedSet];
+
+    for (NSDictionary *variant in variants) {
+        NSString *model = variant[@"model"];
+        if (model.length) [numbers addObject:model];
+    }
+
+    return numbers.array;
 }
 
 #pragma mark - Device Normalization
 
-- (NSString *)familyForIdentifier:(NSString *)identifier
-                         fallback:(NSString *)fallback {
-    if ([identifier hasPrefix:@"iPhone"]) return @"iPhone";
-    if ([identifier hasPrefix:@"iPad"]) return @"iPad";
-
-    if ([fallback isEqualToString:@"iPhone"] ||
-        [fallback isEqualToString:@"iPad"]) {
-        return fallback;
-    }
-
-    return nil;
-}
-
 - (NSDictionary *)normalizeIPSWDevice:(NSDictionary *)item {
-    NSString *name = [self firstStringIn:item keys:@[@"name", @"deviceName"]];
-    NSString *identifier = [self firstStringIn:item
-                                           keys:@[@"identifier", @"productType", @"product_type"]];
+    NSString *identifier =
+    [self firstStringIn:item
+                   keys:@[@"identifier", @"productType", @"product_type"]];
 
-    NSString *family = [self familyForIdentifier:identifier
-                                        fallback:[self firstStringIn:item
-                                                               keys:@[@"product_type", @"type"]]];
+    NSString *family = [self familyForIdentifier:identifier];
 
-    if (!name.length || !identifier.length || !family.length) return nil;
+    // Не допускаем аксессуары и сторонние записи.
+    if (!family) return nil;
+
+    NSString *name =
+    [self firstStringIn:item keys:@[@"name", @"deviceName", @"marketingName"]];
+
+    if (!name.length) return nil;
 
     NSMutableDictionary *device = [NSMutableDictionary dictionary];
-
     device[@"name"] = name;
     device[@"identifier"] = identifier;
     device[@"product_type"] = family;
 
-    NSString *board = [self firstStringIn:item
-                                    keys:@[@"boardconfig", @"boardConfig", @"board"]];
+    NSString *board =
+    [self firstStringIn:item
+                   keys:@[@"boardconfig", @"boardConfig", @"board",
+                          @"board_id", @"boardID"]];
 
-    if (board) device[@"boardconfig"] = board;
+    if (board.length) device[@"boardconfig"] = board;
 
-    id models = item[@"models"] ?: item[@"modelNumbers"];
-
-    if ([models isKindOfClass:[NSArray class]]) {
-        device[@"models"] = models;
-    } else if ([models isKindOfClass:[NSString class]]) {
-        device[@"models"] = @[models];
+    NSArray *variants = [self modelVariantsFromRecord:item];
+    if (variants.count) {
+        device[@"model_variants"] = variants;
+        device[@"models"] = [self uniqueModelNumbersFromVariants:variants];
     }
 
-    NSArray *copyKeys = @[
+    for (NSString *key in @[
         @"introduction", @"launch_os_version", @"apple_cpu",
-        @"platform", @"screen", @"cellular", @"imageurl",
-        @"apple_image", @"support_id"
-    ];
-
-    for (NSString *key in copyKeys) {
+        @"platform", @"screen", @"cellular", "support_id"
+    ]) {
         id value = item[key];
         if (value && value != [NSNull null]) device[key] = value;
     }
@@ -272,29 +394,34 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
 - (NSArray *)normalizeAppleDBDevices:(id)json {
     NSMutableArray *raw = [NSMutableArray array];
 
-    if ([json isKindOfClass:[NSArray class]]) {
+    if ([json isKindOfClass:NSArray.class]) {
         [raw addObjectsFromArray:json];
-    } else if ([json isKindOfClass:[NSDictionary class]]) {
+    } else if ([json isKindOfClass:NSDictionary.class]) {
         NSDictionary *dict = json;
-
         id nested = dict[@"devices"] ?: dict[@"data"];
 
-        if ([nested isKindOfClass:[NSArray class]]) {
+        if ([nested isKindOfClass:NSArray.class]) {
             [raw addObjectsFromArray:nested];
-        } else if ([nested isKindOfClass:[NSDictionary class]]) {
-            [raw addObjectsFromArray:[nested allValues]];
-        } else {
-            for (id key in dict) {
-                id value = dict[key];
-
-                if (![value isKindOfClass:[NSDictionary class]]) continue;
+        } else if ([nested isKindOfClass:NSDictionary.class]) {
+            for (id key in nested) {
+                id value = nested[key];
+                if (![value isKindOfClass:NSDictionary.class]) continue;
 
                 NSMutableDictionary *record = [value mutableCopy];
-
                 if (!record[@"identifier"] && !record[@"key"]) {
                     record[@"identifier"] = key;
                 }
+                [raw addObject:record];
+            }
+        } else {
+            for (id key in dict) {
+                id value = dict[key];
+                if (![value isKindOfClass:NSDictionary.class]) continue;
 
+                NSMutableDictionary *record = [value mutableCopy];
+                if (!record[@"identifier"] && !record[@"key"]) {
+                    record[@"identifier"] = key;
+                }
                 [raw addObject:record];
             }
         }
@@ -303,22 +430,14 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
     NSMutableArray *result = [NSMutableArray array];
 
     for (id item in raw) {
-        if (![item isKindOfClass:[NSDictionary class]]) continue;
+        if (![item isKindOfClass:NSDictionary.class]) continue;
 
         NSDictionary *record = item;
+        NSString *identifier = [self deviceIdentifierFromRecord:record];
+        NSString *family = [self familyForIdentifier:identifier];
 
-        NSString *identifier =
-        [self firstStringIn:record
-                       keys:@[@"identifier", @"key", @"device",
-                              @"productType", @"product_type"]];
-
-        NSString *family =
-        [self familyForIdentifier:identifier
-                         fallback:[self firstStringIn:record
-                                                keys:@[@"type", @"deviceType",
-                                                       @"product_type"]]];
-
-        if (!identifier.length || !family.length) continue;
+        // Строго только реальные ProductType iPhone/iPad.
+        if (!family) continue;
 
         NSString *name =
         [self firstStringIn:record
@@ -327,7 +446,6 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
         if (!name.length) name = identifier;
 
         NSMutableDictionary *device = [NSMutableDictionary dictionary];
-
         device[@"name"] = name;
         device[@"identifier"] = identifier;
         device[@"product_type"] = family;
@@ -337,15 +455,24 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
                        keys:@[@"board", @"boardconfig", @"boardConfig",
                               @"board_id", @"boardID"]];
 
-        if (board) device[@"boardconfig"] = board;
-
-        id models = record[@"models"] ?: record[@"modelNumbers"];
-
-        if ([models isKindOfClass:[NSArray class]]) {
-            device[@"models"] = models;
-        } else if ([models isKindOfClass:[NSString class]]) {
-            device[@"models"] = @[models];
+        if ([board isKindOfClass:NSArray.class]) {
+            board = [board componentsJoinedByString:@", "];
         }
+
+        if (board.length) device[@"boardconfig"] = board;
+
+        NSArray *variants = [self modelVariantsFromRecord:record];
+
+        if (variants.count) {
+            device[@"model_variants"] = variants;
+            device[@"models"] = [self uniqueModelNumbersFromVariants:variants];
+        }
+
+        NSString *introduced =
+        [self firstStringIn:record
+                       keys:@[@"released", @"releaseDate", @"introduction"]];
+
+        if (introduced.length) device[@"introduction"] = introduced;
 
         [result addObject:device];
     }
@@ -356,13 +483,11 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
 #pragma mark - Device Catalog
 
 - (NSArray<NSDictionary *> *)devicesForFamily:(NSString *)family {
-    NSArray *devices =
-    [[self prefs] arrayForKey:@"DIMCatalogDevices"];
-
+    NSArray *devices = [[self prefs] arrayForKey:@"DIMCatalogDevices"];
     NSMutableArray *result = [NSMutableArray array];
 
     for (NSDictionary *device in devices) {
-        if (![device isKindOfClass:[NSDictionary class]]) continue;
+        if (![device isKindOfClass:NSDictionary.class]) continue;
 
         if ([device[@"product_type"] isEqualToString:family]) {
             [result addObject:device];
@@ -382,7 +507,6 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
 
     for (NSDictionary *device in
          [[self prefs] arrayForKey:@"DIMCatalogDevices"]) {
-
         if ([device[@"identifier"] isEqualToString:identifier]) {
             return device;
         }
@@ -399,18 +523,33 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
     for (NSArray *source in sources) {
         for (NSDictionary *device in source) {
             NSString *identifier = device[@"identifier"];
-            if (!identifier.length) continue;
+            if (![self familyForIdentifier:identifier]) continue;
 
             NSMutableDictionary *existing =
             [unique[identifier] mutableCopy] ?: [NSMutableDictionary dictionary];
 
             for (NSString *key in device) {
                 id value = device[key];
+                id oldValue = existing[key];
 
-                if (!existing[key] ||
-                    ([existing[key] isKindOfClass:[NSString class]] &&
-                     [existing[key] length] == 0)) {
+                if (!oldValue ||
+                    ([oldValue isKindOfClass:NSString.class] &&
+                     [oldValue length] == 0)) {
                     existing[key] = value;
+                    continue;
+                }
+
+                if ([key isEqualToString:@"models"] ||
+                    [key isEqualToString:@"model_variants"]) {
+                    NSMutableOrderedSet *merged =
+                    [NSMutableOrderedSet orderedSetWithArray:
+                     ([oldValue isKindOfClass:NSArray.class] ? oldValue : @[])];
+
+                    if ([value isKindOfClass:NSArray.class]) {
+                        [merged addObjectsFromArray:value];
+                    }
+
+                    existing[key] = merged.array;
                 }
             }
 
@@ -427,7 +566,6 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
     NSString *safe =
     [identifier stringByReplacingOccurrencesOfString:@","
                                            withString:@"_"];
-
     return [@"DIMFirmware_" stringByAppendingString:safe];
 }
 
@@ -435,13 +573,13 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
     NSArray *items =
     [[self prefs] arrayForKey:[self firmwareCacheKey:identifier]];
 
-    return [items isKindOfClass:[NSArray class]] ? items : @[];
+    return [items isKindOfClass:NSArray.class] ? items : @[];
 }
 
 - (void)refreshFirmwaresForDevice:(NSString *)identifier
                        completion:(void (^)(BOOL success, NSString *message))completion {
 
-    if (!identifier.length) {
+    if (![self familyForIdentifier:identifier]) {
         if (completion) completion(NO, @"Invalid device identifier.");
         return;
     }
@@ -451,45 +589,55 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
      DIMIPSWBase, [self escapedPath:identifier]];
 
     [self requestURL:url completion:^(id json, BOOL success, NSString *error) {
-
         if (!success) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 if (completion) {
                     completion(NO,
                         [NSString stringWithFormat:
-                         @"IPSW firmware request failed: %@", error ?: @"Unknown error"]);
+                         @"IPSW firmware request failed: %@",
+                         error ?: @"Unknown error"]);
                 }
             });
             return;
         }
 
         NSArray *source = [self arrayFromJSON:json];
-        NSMutableArray *result = [NSMutableArray array];
+        NSMutableDictionary *unique = [NSMutableDictionary dictionary];
 
         for (NSDictionary *firmware in source) {
-            if (![firmware isKindOfClass:[NSDictionary class]]) continue;
+            if (![firmware isKindOfClass:NSDictionary.class]) continue;
 
             NSString *version =
             [self firstStringIn:firmware keys:@[@"version", @"osVersion"]];
 
             NSString *build =
-            [self firstStringIn:firmware keys:@[@"buildid", @"buildId", @"build"]];
+            [self firstStringIn:firmware
+                           keys:@[@"buildid", @"buildId", @"build"]];
 
             if (!version.length || !build.length) continue;
 
             NSMutableDictionary *entry = [NSMutableDictionary dictionary];
-
             entry[@"version"] = version;
             entry[@"build"] = build;
             entry[@"compatible"] = @YES;
             entry[@"source"] = @"IPSW.info";
-            entry[@"is_beta"] = @NO;
+
+            BOOL beta =
+            [self boolValueFrom:firmware
+                           keys:@[@"beta", @"isBeta", @"is_beta"]
+                       fallback:NO];
+
+            entry[@"is_beta"] = @(beta);
 
             id signedValue = firmware[@"signed"];
-            if (signedValue) entry[@"signed"] = signedValue;
+            if (signedValue && signedValue != [NSNull null]) {
+                entry[@"signed"] = signedValue;
+            }
 
             NSString *date =
-            [self firstStringIn:firmware keys:@[@"releasedate", @"releaseDate"]];
+            [self firstStringIn:firmware
+                           keys:@[@"releasedate", @"releaseDate",
+                                  @"release_date"]];
 
             if (date) entry[@"release_date"] = date;
 
@@ -498,20 +646,22 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
 
             if (download) entry[@"url"] = download;
 
-            [result addObject:entry];
+            NSString *key = [NSString stringWithFormat:@"%@|%@", version, build];
+            unique[key] = entry;
         }
 
-        [result sortUsingComparator:^NSComparisonResult(NSDictionary *a,
-                                                         NSDictionary *b) {
-            return [b[@"version"] compare:a[@"version"]
-                                  options:NSNumericSearch];
+        NSArray *result = [[unique allValues]
+            sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,
+                                                            NSDictionary *b) {
+            NSComparisonResult comparison =
+            [b[@"version"] compare:a[@"version"] options:NSNumericSearch];
+
+            if (comparison != NSOrderedSame) return comparison;
+            return [b[@"build"] compare:a[@"build"] options:NSNumericSearch];
         }];
 
         NSUserDefaults *prefs = [self prefs];
-
-        [prefs setObject:result
-                  forKey:[self firmwareCacheKey:identifier]];
-
+        [prefs setObject:result forKey:[self firmwareCacheKey:identifier]];
         [prefs synchronize];
 
         dispatch_async(dispatch_get_main_queue(), ^{
@@ -527,8 +677,7 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
 
 #pragma mark - AppleDB OS Parsing
 
-- (BOOL)isBetaRecord:(NSDictionary *)record
-             version:(NSString *)version {
+- (BOOL)isBetaRecord:(NSDictionary *)record version:(NSString *)version {
     BOOL explicitBeta =
     [self boolValueFrom:record
                    keys:@[@"beta", @"isBeta", @"is_beta",
@@ -549,81 +698,86 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
         return YES;
     }
 
-    NSString *lowerVersion = [version lowercaseString];
+    NSString *lower = [version lowercaseString];
 
-    return [lowerVersion containsString:@"beta"] ||
-           [lowerVersion containsString:@"developer"] ||
-           [lowerVersion containsString:@"rc"];
+    return [lower containsString:@"beta"] ||
+           [lower containsString:@"developer"] ||
+           [lower containsString:@"rc"];
 }
 
 - (NSArray *)deviceIdentifiersFromRecord:(NSDictionary *)record {
     id devices = record[@"devices"] ?: record[@"compatibleDevices"];
-
-    if (![devices isKindOfClass:[NSArray class]]) return @[];
-
     NSMutableArray *identifiers = [NSMutableArray array];
 
-    for (id item in (NSArray *)devices) {
-        if ([item isKindOfClass:[NSString class]]) {
-            [identifiers addObject:item];
-        } else if ([item isKindOfClass:[NSDictionary class]]) {
-            NSString *identifier =
-            [self firstStringIn:item
-                           keys:@[@"identifier", @"key", @"device",
-                                  @"productType", @"product_type"]];
+    if ([devices isKindOfClass:NSArray.class]) {
+        for (id item in devices) {
+            if ([item isKindOfClass:NSString.class]) {
+                [identifiers addObject:item];
+            } else if ([item isKindOfClass:NSDictionary.class]) {
+                NSString *identifier = [self deviceIdentifierFromRecord:item];
+                if (identifier.length) [identifiers addObject:identifier];
+            }
+        }
+    } else if ([devices isKindOfClass:NSDictionary.class]) {
+        for (id key in devices) {
+            id value = devices[key];
 
-            if (identifier) [identifiers addObject:identifier];
+            if ([value isKindOfClass:NSNumber.class] &&
+                ![value boolValue]) continue;
+
+            NSString *identifier = [self deviceIdentifierFromRecord:
+                                    ([value isKindOfClass:NSDictionary.class]
+                                     ? value : @{@"identifier": key})];
+
+            if (identifier.length) [identifiers addObject:identifier];
         }
     }
 
-    return identifiers;
+    return [[NSOrderedSet orderedSetWithArray:identifiers] array];
 }
 
 - (NSArray *)normalizeAppleDBOS:(id)json {
-    NSArray *raw = [self arrayFromJSON:json];
+    NSMutableArray *raw = [NSMutableArray array];
 
-    if (raw.count == 0 && [json isKindOfClass:[NSDictionary class]]) {
+    if ([json isKindOfClass:NSArray.class]) {
+        [raw addObjectsFromArray:json];
+    } else if ([json isKindOfClass:NSDictionary.class]) {
         NSDictionary *dict = json;
 
-        for (NSString *key in @[@"ios", @"iOS", @"releases"]) {
+        NSArray *knownKeys = @[@"ios", @"iOS", @"releases", @"data"];
+
+        for (NSString *key in knownKeys) {
             id value = dict[key];
-            if ([value isKindOfClass:[NSArray class]]) {
-                raw = value;
+            if ([value isKindOfClass:NSArray.class]) {
+                [raw addObjectsFromArray:value];
                 break;
             }
         }
 
         if (raw.count == 0) {
-            NSMutableArray *values = [NSMutableArray array];
-
             for (id key in dict) {
                 id value = dict[key];
+                if (![value isKindOfClass:NSDictionary.class]) continue;
 
-                if ([value isKindOfClass:[NSDictionary class]]) {
-                    NSMutableDictionary *record = [value mutableCopy];
+                NSMutableDictionary *record = [value mutableCopy];
 
-                    if (!record[@"build"]) {
-                        NSString *keyString = [self stringValue:key];
-                        NSArray *parts = [keyString componentsSeparatedByString:@";"];
+                NSString *keyString = [self stringValue:key];
+                NSArray *parts = [keyString componentsSeparatedByString:@";"];
 
-                        if (parts.count > 1) {
-                            record[@"osStr"] = parts[0];
-                            record[@"build"] = parts[1];
-                        }
-                    }
-
-                    [values addObject:record];
+                if (parts.count >= 2) {
+                    if (!record[@"osStr"]) record[@"osStr"] = parts[0];
+                    if (!record[@"build"]) record[@"build"] = parts[1];
                 }
-            }
 
-            raw = values;
+                [raw addObject:record];
+            }
         }
     }
 
     NSMutableDictionary *unique = [NSMutableDictionary dictionary];
 
     for (id item in raw) {
-        if (![item isKindOfClass:[NSDictionary class]]) continue;
+        if (![item isKindOfClass:NSDictionary.class]) continue;
 
         NSDictionary *record = item;
 
@@ -641,8 +795,8 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
 
         if (!osString.length || !version.length || !build.length) continue;
 
-        NSString *family = nil;
         NSString *lowerOS = [osString lowercaseString];
+        NSString *family = nil;
 
         if ([lowerOS containsString:@"ipados"]) {
             family = @"iPad";
@@ -654,7 +808,6 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
         if (!family) continue;
 
         BOOL beta = [self isBetaRecord:record version:version];
-
         NSArray *devices = [self deviceIdentifiersFromRecord:record];
 
         NSString *key =
@@ -670,7 +823,9 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
         entry[@"compatible_devices"] = devices;
         entry[@"source"] = @"AppleDB";
 
-        if (record[@"signed"]) entry[@"signed"] = record[@"signed"];
+        if (record[@"signed"] && record[@"signed"] != [NSNull null]) {
+            entry[@"signed"] = record[@"signed"];
+        }
 
         NSString *date =
         [self firstStringIn:record
@@ -682,15 +837,13 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
         unique[key] = entry;
     }
 
-    NSArray *result = [unique allValues];
-
-    return [result sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,
-                                                                   NSDictionary *b) {
-        NSComparisonResult versionResult =
+    return [[unique allValues]
+        sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,
+                                                        NSDictionary *b) {
+        NSComparisonResult comparison =
         [b[@"version"] compare:a[@"version"] options:NSNumericSearch];
 
-        if (versionResult != NSOrderedSame) return versionResult;
-
+        if (comparison != NSOrderedSame) return comparison;
         return [b[@"build"] compare:a[@"build"] options:NSNumericSearch];
     }];
 }
@@ -704,21 +857,15 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
     : @"DIMAppleDB_iOS";
 
     NSArray *versions = [[self prefs] arrayForKey:key];
-
-    return [versions isKindOfClass:[NSArray class]] ? versions : @[];
+    return [versions isKindOfClass:NSArray.class] ? versions : @[];
 }
 
-- (BOOL)build:(NSDictionary *)build
-supportsDevice:(NSString *)identifier {
-
+- (BOOL)build:(NSDictionary *)build supportsDevice:(NSString *)identifier {
     NSArray *devices = build[@"compatible_devices"];
-
-    if (![devices isKindOfClass:[NSArray class]] || devices.count == 0) {
-        return NO;
-    }
+    if (![devices isKindOfClass:NSArray.class]) return NO;
 
     for (NSString *candidate in devices) {
-        if (![candidate isKindOfClass:[NSString class]]) continue;
+        if (![candidate isKindOfClass:NSString.class]) continue;
 
         if ([candidate isEqualToString:identifier]) return YES;
 
@@ -735,16 +882,16 @@ supportsDevice:(NSString *)identifier {
                                   includeBetas:(BOOL)includeBetas
                             allowIncompatible:(BOOL)allowIncompatible {
 
+    if (![self familyForIdentifier:identifier]) return @[];
+
     NSDictionary *device = [self deviceForIdentifier:identifier];
     NSString *family = device[@"product_type"];
 
-    if (!family) {
-        family = [identifier hasPrefix:@"iPad"] ? @"iPad" : @"iPhone";
-    }
+    if (!family) family = [identifier hasPrefix:@"iPad"] ? @"iPad" : @"iPhone";
 
     NSMutableDictionary *unique = [NSMutableDictionary dictionary];
 
-    // Device-specific IPSW builds
+    // IPSW.info: builds explicitly returned for this device.
     for (NSDictionary *firmware in [self firmwaresForDevice:identifier]) {
         if ([firmware[@"is_beta"] boolValue] && !includeBetas) continue;
 
@@ -754,20 +901,17 @@ supportsDevice:(NSString *)identifier {
         if (!version.length || !build.length) continue;
 
         NSString *key = [NSString stringWithFormat:@"%@|%@", version, build];
-
         NSMutableDictionary *entry = [firmware mutableCopy];
         entry[@"compatible"] = @YES;
         entry[@"family"] = family;
-
         unique[key] = entry;
     }
 
-    // Global AppleDB builds
+    // AppleDB: global build catalog, filtered by actual compatible devices.
     for (NSDictionary *build in [self versionsForFamily:family]) {
         if ([build[@"is_beta"] boolValue] && !includeBetas) continue;
 
         BOOL compatible = [self build:build supportsDevice:identifier];
-
         if (!compatible && !allowIncompatible) continue;
 
         NSString *version = build[@"version"];
@@ -775,30 +919,23 @@ supportsDevice:(NSString *)identifier {
 
         if (!version.length || !buildID.length) continue;
 
-        NSString *key =
-        [NSString stringWithFormat:@"%@|%@", version, buildID];
-
+        NSString *key = [NSString stringWithFormat:@"%@|%@", version, buildID];
         NSMutableDictionary *entry =
         [unique[key] mutableCopy] ?: [NSMutableDictionary dictionary];
 
-        for (NSString *field in build) {
-            entry[field] = build[field];
-        }
-
+        [entry addEntriesFromDictionary:build];
         entry[@"compatible"] = @(compatible);
 
         unique[key] = entry;
     }
 
-    NSArray *result = [unique allValues];
-
-    return [result sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,
-                                                                   NSDictionary *b) {
-        NSComparisonResult versionResult =
+    return [[unique allValues]
+        sortedArrayUsingComparator:^NSComparisonResult(NSDictionary *a,
+                                                        NSDictionary *b) {
+        NSComparisonResult comparison =
         [b[@"version"] compare:a[@"version"] options:NSNumericSearch];
 
-        if (versionResult != NSOrderedSame) return versionResult;
-
+        if (comparison != NSOrderedSame) return comparison;
         return [b[@"build"] compare:a[@"build"] options:NSNumericSearch];
     }];
 }
@@ -821,17 +958,12 @@ supportsDevice:(NSString *)identifier {
     __block NSString *osError = nil;
 
     NSArray *urls = @[
-        [NSString stringWithFormat:
-         @"%@/devices?type=iPhone&format=full", DIMIPSWBase],
-
-        [NSString stringWithFormat:
-         @"%@/devices?type=iPad&format=full", DIMIPSWBase],
-
-        [NSString stringWithFormat:
-         @"%@/device/main.json", DIMAppleDBBase],
-
-        [NSString stringWithFormat:
-         @"%@/ios/main.json", DIMAppleDBBase]
+        [NSString stringWithFormat:@"%@/devices?type=iPhone&format=full",
+         DIMIPSWBase],
+        [NSString stringWithFormat:@"%@/devices?type=iPad&format=full",
+         DIMIPSWBase],
+        [NSString stringWithFormat:@"%@/device/main.json", DIMAppleDBBase],
+        [NSString stringWithFormat:@"%@/ios/main.json", DIMAppleDBBase]
     ];
 
     for (NSUInteger index = 0; index < urls.count; index++) {
@@ -839,7 +971,6 @@ supportsDevice:(NSString *)identifier {
 
         [self requestURL:urls[index]
               completion:^(id json, BOOL success, NSString *error) {
-
             switch (index) {
                 case 0:
                     ipswPhones = json;
@@ -858,18 +989,16 @@ supportsDevice:(NSString *)identifier {
                     osError = success ? nil : error;
                     break;
             }
-
             dispatch_group_leave(group);
         }];
     }
 
     dispatch_group_notify(group, dispatch_get_main_queue(), ^{
-
         NSMutableArray *phoneRecords = [NSMutableArray array];
         NSMutableArray *padRecords = [NSMutableArray array];
 
         for (id item in [self arrayFromJSON:ipswPhones]) {
-            if (![item isKindOfClass:[NSDictionary class]]) continue;
+            if (![item isKindOfClass:NSDictionary.class]) continue;
 
             NSDictionary *device = [self normalizeIPSWDevice:item];
             if ([device[@"product_type"] isEqualToString:@"iPhone"]) {
@@ -878,7 +1007,7 @@ supportsDevice:(NSString *)identifier {
         }
 
         for (id item in [self arrayFromJSON:ipswPads]) {
-            if (![item isKindOfClass:[NSDictionary class]]) continue;
+            if (![item isKindOfClass:NSDictionary.class]) continue;
 
             NSDictionary *device = [self normalizeIPSWDevice:item];
             if ([device[@"product_type"] isEqualToString:@"iPad"]) {
@@ -889,22 +1018,22 @@ supportsDevice:(NSString *)identifier {
         NSArray *appleDeviceRecords =
         [self normalizeAppleDBDevices:appleDevices];
 
-        NSMutableArray *applePhoneRecords = [NSMutableArray array];
-        NSMutableArray *applePadRecords = [NSMutableArray array];
+        NSMutableArray *applePhones = [NSMutableArray array];
+        NSMutableArray *applePads = [NSMutableArray array];
 
         for (NSDictionary *device in appleDeviceRecords) {
             if ([device[@"product_type"] isEqualToString:@"iPhone"]) {
-                [applePhoneRecords addObject:device];
+                [applePhones addObject:device];
             } else if ([device[@"product_type"] isEqualToString:@"iPad"]) {
-                [applePadRecords addObject:device];
+                [applePads addObject:device];
             }
         }
 
         NSArray *mergedPhones =
-        [self mergeDeviceSources:@[phoneRecords, applePhoneRecords]];
+        [self mergeDeviceSources:@[phoneRecords, applePhones]];
 
         NSArray *mergedPads =
-        [self mergeDeviceSources:@[padRecords, applePadRecords]];
+        [self mergeDeviceSources:@[padRecords, applePads]];
 
         NSArray *mergedDevices =
         [self mergeDeviceSources:@[mergedPhones, mergedPads]];
@@ -924,6 +1053,7 @@ supportsDevice:(NSString *)identifier {
 
         NSUserDefaults *prefs = [self prefs];
 
+        // Не затираем рабочий кеш пустым ответом.
         if (mergedDevices.count > 0) {
             [prefs setObject:mergedDevices forKey:@"DIMCatalogDevices"];
         }
@@ -972,7 +1102,8 @@ supportsDevice:(NSString *)identifier {
             [prefs setObject:[NSDate date] forKey:@"DIMCatalogLastUpdated"];
             [prefs setObject:message forKey:@"DIMCatalogStatus"];
         } else {
-            [prefs setObject:@"No usable catalog data received. Previous cache preserved."
+            [prefs setObject:
+             @"No usable catalog data received. Previous cache preserved."
                       forKey:@"DIMCatalogStatus"];
         }
 
