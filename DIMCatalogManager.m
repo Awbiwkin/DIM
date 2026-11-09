@@ -382,7 +382,7 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
 
     for (NSString *key in @[
         @"introduction", @"launch_os_version", @"apple_cpu",
-        @"platform", @"screen", @"cellular", "support_id"
+        @"platform", @"screen", @"cellular", @"support_id"
     ]) {
         id value = item[key];
         if (value && value != [NSNull null]) device[key] = value;
@@ -450,13 +450,46 @@ static NSString * const DIMAppleDBBase = @"https://api.appledb.dev";
         device[@"identifier"] = identifier;
         device[@"product_type"] = family;
 
-        NSString *board =
-        [self firstStringIn:record
-                       keys:@[@"board", @"boardconfig", @"boardConfig",
-                              @"board_id", @"boardID"]];
+        id rawBoard = record[@"board"] ?:
+                      record[@"boardconfig"] ?:
+                      record[@"boardConfig"] ?:
+                      record[@"board_id"] ?:
+                      record[@"boardID"];
 
-        if ([board isKindOfClass:NSArray.class]) {
-            board = [board componentsJoinedByString:@", "];
+        NSString *board = nil;
+
+        if ([rawBoard isKindOfClass:NSString.class]) {
+            board = rawBoard;
+        } else if ([rawBoard isKindOfClass:NSArray.class]) {
+            NSMutableArray *boardParts = [NSMutableArray array];
+
+            for (id item in (NSArray *)rawBoard) {
+                NSString *part = [self stringValue:item];
+
+                if (!part.length && [item isKindOfClass:NSDictionary.class]) {
+                    part = [self firstStringIn:item
+                                          keys:@[@"board", @"name",
+                                                 @"identifier", @"id"]];
+                }
+
+                if (part.length) [boardParts addObject:part];
+            }
+
+            if (boardParts.count) {
+                board = [boardParts componentsJoinedByString:@", "];
+            }
+        } else if ([rawBoard isKindOfClass:NSDictionary.class]) {
+            NSMutableArray *boardParts = [NSMutableArray array];
+
+            for (id key in rawBoard) {
+                NSString *part = [self stringValue:rawBoard[key]];
+                if (!part.length) part = [self stringValue:key];
+                if (part.length) [boardParts addObject:part];
+            }
+
+            if (boardParts.count) {
+                board = [boardParts componentsJoinedByString:@", "];
+            }
         }
 
         if (board.length) device[@"boardconfig"] = board;
