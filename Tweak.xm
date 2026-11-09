@@ -1,3 +1,4 @@
+
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
 #import <objc/runtime.h>
@@ -26,7 +27,6 @@ static NSString * const DIMDomain = @"com.dim.manager";
 static NSString * const DIMTargetBundleID = @"ph.telegra.Telegraph";
 
 static NSDictionary *DIMConfiguration = nil;
-static BOOL DIMHooksInstalled = NO;
 
 static NSUInteger DIMImagesScanned = 0;
 static NSUInteger DIMLinkeditFound = 0;
@@ -37,27 +37,15 @@ static NSUInteger DIMInvalidImages = 0;
 
 #pragma mark - Original functions
 
-static int (*DIMOriginalSysctlByName)(
-    const char *, void *, size_t *, void *, size_t
-) = NULL;
-
-static int (*DIMOriginalSysctl)(
-    int *, u_int, void *, size_t *, void *, size_t
-) = NULL;
-
-static int (*DIMOriginalSysctlNameToMIB)(
-    const char *, int *, size_t *
-) = NULL;
-
-static int (*DIMOriginalUname)(
-    struct utsname *
-) = NULL;
+static int (*DIMOriginalSysctlByName)(const char *, void *, size_t *, void *, size_t) = NULL;
+static int (*DIMOriginalSysctl)(int *, u_int, void *, size_t *, void *, size_t) = NULL;
+static int (*DIMOriginalSysctlNameToMIB)(const char *, int *, size_t *) = NULL;
+static int (*DIMOriginalUname)(struct utsname *) = NULL;
 
 #pragma mark - Configuration
 
 static NSDictionary *DIMLoadConfiguration(void) {
-    NSUserDefaults *prefs =
-        [[NSUserDefaults alloc] initWithSuiteName:DIMDomain];
+    NSUserDefaults *prefs = [[NSUserDefaults alloc] initWithSuiteName:DIMDomain];
 
     if (!prefs) {
         NSLog(@"[DIM] Preferences domain unavailable");
@@ -68,8 +56,7 @@ static NSDictionary *DIMLoadConfiguration(void) {
     BOOL deviceEnabled = [prefs boolForKey:@"DeviceEnabled"];
 
     if (!enabled || !deviceEnabled) {
-        NSLog(@"[DIM] Disabled: Enabled=%d DeviceEnabled=%d",
-              enabled, deviceEnabled);
+        NSLog(@"[DIM] Disabled: Enabled=%d DeviceEnabled=%d", enabled, deviceEnabled);
         return nil;
     }
 
@@ -83,12 +70,18 @@ static NSDictionary *DIMLoadConfiguration(void) {
 
     NSString *bundleID = NSBundle.mainBundle.bundleIdentifier ?: @"";
 
+    // Test profile is deliberately restricted to Telegram.
+    if (![bundleID isEqualToString:DIMTargetBundleID]) {
+        NSLog(@"[DIM] Not target application: %@", bundleID);
+        return nil;
+    }
+
     if (!global && onlyIn) {
         NSArray *selectedApps = [prefs arrayForKey:@"SelectedApps"];
 
         if (![selectedApps isKindOfClass:NSArray.class] ||
             ![selectedApps containsObject:bundleID]) {
-            NSLog(@"[DIM] Not selected: %@", bundleID);
+            NSLog(@"[DIM] Telegram is not selected in Only In");
             return nil;
         }
     }
@@ -106,24 +99,17 @@ static NSDictionary *DIMLoadConfiguration(void) {
 
         NSLog(@"[DIM] TEST PROFILE ACTIVE");
         NSLog(@"[DIM] Target process: %@", bundleID);
-        NSLog(@"[DIM] Model: %@ (%@)",
-              testProfile[@"name"], testProfile[@"identifier"]);
+        NSLog(@"[DIM] Model: %@ (%@)", testProfile[@"name"], testProfile[@"identifier"]);
         NSLog(@"[DIM] iOS %@ (%@), Darwin %@",
-              testProfile[@"version"],
-              testProfile[@"build"],
-              testProfile[@"darwin"]);
+              testProfile[@"version"], testProfile[@"build"], testProfile[@"darwin"]);
 
         return testProfile;
     }
 
-    NSString *identifier =
-        [prefs stringForKey:@"SelectedModel"] ?: @"";
-    NSString *version =
-        [prefs stringForKey:@"SelectedVersion"] ?: @"";
-    NSString *build =
-        [prefs stringForKey:@"SelectedBuild"] ?: @"";
-    NSString *family =
-        [prefs stringForKey:@"DeviceFamily"] ?: @"";
+    NSString *identifier = [prefs stringForKey:@"SelectedModel"] ?: @"";
+    NSString *version = [prefs stringForKey:@"SelectedVersion"] ?: @"";
+    NSString *build = [prefs stringForKey:@"SelectedBuild"] ?: @"";
+    NSString *family = [prefs stringForKey:@"DeviceFamily"] ?: @"";
 
     if (!identifier.length && !version.length && !build.length) {
         NSLog(@"[DIM] Empty profile");
@@ -137,19 +123,12 @@ static NSDictionary *DIMLoadConfiguration(void) {
 
     if ([devices isKindOfClass:NSArray.class]) {
         for (id candidate in devices) {
-            if (![candidate isKindOfClass:NSDictionary.class])
-                continue;
-
-            if (![candidate[@"identifier"] isKindOfClass:NSString.class])
-                continue;
-
-            if (![candidate[@"identifier"] isEqualToString:identifier])
-                continue;
+            if (![candidate isKindOfClass:NSDictionary.class]) continue;
+            if (![candidate[@"identifier"] isKindOfClass:NSString.class]) continue;
+            if (![candidate[@"identifier"] isEqualToString:identifier]) continue;
 
             id nameValue = candidate[@"name"];
-
-            if ([nameValue isKindOfClass:NSString.class] &&
-                [nameValue length]) {
+            if ([nameValue isKindOfClass:NSString.class] && [nameValue length]) {
                 marketingName = nameValue;
             }
 
@@ -159,14 +138,12 @@ static NSDictionary *DIMLoadConfiguration(void) {
                 board = boardValue;
             } else if ([boardValue isKindOfClass:NSArray.class]) {
                 for (id item in (NSArray *)boardValue) {
-                    if ([item isKindOfClass:NSString.class] &&
-                        [item length]) {
+                    if ([item isKindOfClass:NSString.class] && [item length]) {
                         board = item;
                         break;
                     }
                 }
             }
-
             break;
         }
     }
@@ -183,20 +160,12 @@ static NSDictionary *DIMLoadConfiguration(void) {
 
 static NSString *DIMValue(NSString *key) {
     id value = DIMConfiguration[key];
-
-    if ([value isKindOfClass:NSString.class])
-        return value;
-
-    return @"";
+    return [value isKindOfClass:NSString.class] ? value : @"";
 }
 
 #pragma mark - String helpers
 
-static int DIMWriteString(
-    const char *value,
-    void *oldp,
-    size_t *oldlenp
-) {
+static int DIMWriteString(const char *value, void *oldp, size_t *oldlenp) {
     if (!value) {
         errno = EINVAL;
         return -1;
@@ -205,8 +174,7 @@ static int DIMWriteString(
     size_t required = strlen(value) + 1;
 
     if (!oldp) {
-        if (oldlenp)
-            *oldlenp = required;
+        if (oldlenp) *oldlenp = required;
         return 0;
     }
 
@@ -227,25 +195,14 @@ static int DIMWriteString(
     return 0;
 }
 
-static int DIMWriteConfiguredString(
-    NSString *key,
-    void *oldp,
-    size_t *oldlenp
-) {
+static int DIMWriteConfiguredString(NSString *key, void *oldp, size_t *oldlenp) {
     NSString *value = DIMValue(key);
-
-    if (!value.length)
-        return 0;
-
+    if (!value.length) return 0;
     return DIMWriteString(value.UTF8String, oldp, oldlenp);
 }
 
-static void DIMCopyUtsString(char *destination,
-                             size_t destinationSize,
-                             NSString *value) {
-    if (!destination || destinationSize == 0 || !value.length)
-        return;
-
+static void DIMCopyUtsString(char *destination, size_t destinationSize, NSString *value) {
+    if (!destination || destinationSize == 0 || !value.length) return;
     strlcpy(destination, value.UTF8String, destinationSize);
 }
 
@@ -253,71 +210,43 @@ static void DIMCopyUtsString(char *destination,
 
 static NSString *DIMDarwinRelease(void) {
     NSString *release = DIMValue(@"darwin");
-
-    if (release.length)
-        return release;
-
-    NSString *version = DIMValue(@"version");
-
-    if ([version hasPrefix:@"18."])
-        return @"24.0.0";
-
-    return @"24.0.0";
+    return release.length ? release : @"24.0.0";
 }
 
 static NSString *DIMFakeKernelVersion(void) {
     struct utsname originalInfo;
     memset(&originalInfo, 0, sizeof(originalInfo));
 
-    if (DIMOriginalUname &&
-        DIMOriginalUname(&originalInfo) == 0) {
-
-        NSString *original =
-            [NSString stringWithUTF8String:originalInfo.version];
+    if (DIMOriginalUname && DIMOriginalUname(&originalInfo) == 0) {
+        NSString *original = [NSString stringWithUTF8String:originalInfo.version];
 
         if (original.length) {
             NSString *release = DIMDarwinRelease();
-
-            NSRange prefix =
-                [original rangeOfString:@"Darwin Kernel Version "];
+            NSRange prefix = [original rangeOfString:@"Darwin Kernel Version "];
 
             if (prefix.location != NSNotFound) {
                 NSUInteger start = NSMaxRange(prefix);
-                NSRange colon =
-                    [original rangeOfString:@":"
-                                    options:0
-                                      range:NSMakeRange(
-                                          start,
-                                          original.length - start
-                                      )];
+                NSRange colon = [original rangeOfString:@":"
+                                                options:0
+                                                  range:NSMakeRange(start, original.length - start)];
 
                 if (colon.location != NSNotFound) {
-                    NSString *tail =
-                        [original substringFromIndex:colon.location];
-
-                    return [NSString stringWithFormat:
-                        @"Darwin Kernel Version %@%@",
-                        release, tail];
+                    NSString *tail = [original substringFromIndex:colon.location];
+                    return [NSString stringWithFormat:@"Darwin Kernel Version %@%@", release, tail];
                 }
             }
         }
     }
 
     return [NSString stringWithFormat:
-        @"Darwin Kernel Version %@: "
-         "root:xnu-10000.0.0~1/RELEASE_ARM64_T8112",
-        DIMDarwinRelease()];
+            @"Darwin Kernel Version %@: root:xnu-10000.0.0~1/RELEASE_ARM64_T8112",
+            DIMDarwinRelease()];
 }
 
-#pragma mark - sysctlbyname hook
+#pragma mark - sysctlbyname
 
-static BOOL DIMHandleSysctlByName(
-    const char *name,
-    void *oldp,
-    size_t *oldlenp
-) {
-    if (!name || !DIMConfiguration)
-        return NO;
+static BOOL DIMHandleSysctlByName(const char *name, void *oldp, size_t *oldlenp) {
+    if (!name || !DIMConfiguration) return NO;
 
     if (strcmp(name, "hw.machine") == 0) {
         DIMWriteConfiguredString(@"identifier", oldp, oldlenp);
@@ -349,15 +278,9 @@ static BOOL DIMHandleSysctlByName(
     return NO;
 }
 
-static int DIMHook_sysctlbyname(
-    const char *name,
-    void *oldp,
-    size_t *oldlenp,
-    void *newp,
-    size_t newlen
-) {
-    if (DIMConfiguration && !newp &&
-        DIMHandleSysctlByName(name, oldp, oldlenp)) {
+static int DIMHook_sysctlbyname(const char *name, void *oldp, size_t *oldlenp,
+                                void *newp, size_t newlen) {
+    if (DIMConfiguration && !newp && DIMHandleSysctlByName(name, oldp, oldlenp)) {
         return 0;
     }
 
@@ -366,31 +289,17 @@ static int DIMHook_sysctlbyname(
         return -1;
     }
 
-    return DIMOriginalSysctlByName(
-        name, oldp, oldlenp, newp, newlen
-    );
+    return DIMOriginalSysctlByName(name, oldp, oldlenp, newp, newlen);
 }
 
-#pragma mark - sysctl MIB hook
+#pragma mark - sysctl MIB
 
-static BOOL DIMMIBEquals(
-    int *name,
-    u_int namelen,
-    int first,
-    int second
-) {
-    return name && namelen == 2 &&
-           name[0] == first && name[1] == second;
+static BOOL DIMMIBEquals(int *name, u_int namelen, int first, int second) {
+    return name && namelen == 2 && name[0] == first && name[1] == second;
 }
 
-static BOOL DIMHandleSysctlMIB(
-    int *name,
-    u_int namelen,
-    void *oldp,
-    size_t *oldlenp
-) {
-    if (!name || !DIMConfiguration)
-        return NO;
+static BOOL DIMHandleSysctlMIB(int *name, u_int namelen, void *oldp, size_t *oldlenp) {
+    if (!name || !DIMConfiguration) return NO;
 
     if (DIMMIBEquals(name, namelen, CTL_HW, HW_MACHINE)) {
         DIMWriteConfiguredString(@"identifier", oldp, oldlenp);
@@ -422,16 +331,9 @@ static BOOL DIMHandleSysctlMIB(
     return NO;
 }
 
-static int DIMHook_sysctl(
-    int *name,
-    u_int namelen,
-    void *oldp,
-    size_t *oldlenp,
-    void *newp,
-    size_t newlen
-) {
-    if (DIMConfiguration && !newp &&
-        DIMHandleSysctlMIB(name, namelen, oldp, oldlenp)) {
+static int DIMHook_sysctl(int *name, u_int namelen, void *oldp, size_t *oldlenp,
+                          void *newp, size_t newlen) {
+    if (DIMConfiguration && !newp && DIMHandleSysctlMIB(name, namelen, oldp, oldlenp)) {
         return 0;
     }
 
@@ -440,18 +342,12 @@ static int DIMHook_sysctl(
         return -1;
     }
 
-    return DIMOriginalSysctl(
-        name, namelen, oldp, oldlenp, newp, newlen
-    );
+    return DIMOriginalSysctl(name, namelen, oldp, oldlenp, newp, newlen);
 }
 
 #pragma mark - sysctlnametomib passthrough
 
-static int DIMHook_sysctlnametomib(
-    const char *name,
-    int *mib,
-    size_t *size
-) {
+static int DIMHook_sysctlnametomib(const char *name, int *mib, size_t *size) {
     if (!DIMOriginalSysctlNameToMIB) {
         errno = ENOSYS;
         return -1;
@@ -460,7 +356,7 @@ static int DIMHook_sysctlnametomib(
     return DIMOriginalSysctlNameToMIB(name, mib, size);
 }
 
-#pragma mark - uname hook
+#pragma mark - uname
 
 static int DIMHook_uname(struct utsname *info) {
     if (!DIMOriginalUname) {
@@ -469,31 +365,11 @@ static int DIMHook_uname(struct utsname *info) {
     }
 
     int result = DIMOriginalUname(info);
+    if (result != 0 || !info || !DIMConfiguration) return result;
 
-    if (result != 0 || !info || !DIMConfiguration)
-        return result;
-
-    DIMCopyUtsString(
-        info->machine,
-        sizeof(info->machine),
-        DIMValue(@"identifier")
-    );
-
-    NSString *release = DIMDarwinRelease();
-
-    DIMCopyUtsString(
-        info->release,
-        sizeof(info->release),
-        release
-    );
-
-    NSString *kernelVersion = DIMFakeKernelVersion();
-
-    DIMCopyUtsString(
-        info->version,
-        sizeof(info->version),
-        kernelVersion
-    );
+    DIMCopyUtsString(info->machine, sizeof(info->machine), DIMValue(@"identifier"));
+    DIMCopyUtsString(info->release, sizeof(info->release), DIMDarwinRelease());
+    DIMCopyUtsString(info->version, sizeof(info->version), DIMFakeKernelVersion());
 
     return result;
 }
@@ -525,51 +401,24 @@ static int DIMHook_uname(struct utsname *info) {
 
 @end
 
-static BOOL DIMSwizzleInstanceMethod(
-    Class cls,
-    SEL originalSelector,
-    SEL replacementSelector
-) {
-    Method originalMethod =
-        class_getInstanceMethod(cls, originalSelector);
+static BOOL DIMSwizzleInstanceMethod(Class cls, SEL originalSelector, SEL replacementSelector) {
+    Method originalMethod = class_getInstanceMethod(cls, originalSelector);
+    Method replacementMethod = class_getInstanceMethod(cls, replacementSelector);
 
-    Method replacementMethod =
-        class_getInstanceMethod(cls, replacementSelector);
+    if (!originalMethod || !replacementMethod) return NO;
 
-    if (!originalMethod || !replacementMethod)
-        return NO;
-
-    method_exchangeImplementations(
-        originalMethod,
-        replacementMethod
-    );
-
+    method_exchangeImplementations(originalMethod, replacementMethod);
     return YES;
 }
 
 static void DIMInstallUIDeviceHooks(void) {
     Class cls = UIDevice.class;
 
-    BOOL model =
-        DIMSwizzleInstanceMethod(
-            cls,
-            @selector(model),
-            @selector(dim_hooked_model)
-        );
-
-    BOOL localized =
-        DIMSwizzleInstanceMethod(
-            cls,
-            @selector(localizedModel),
-            @selector(dim_hooked_localizedModel)
-        );
-
-    BOOL version =
-        DIMSwizzleInstanceMethod(
-            cls,
-            @selector(systemVersion),
-            @selector(dim_hooked_systemVersion)
-        );
+    BOOL model = DIMSwizzleInstanceMethod(cls, @selector(model), @selector(dim_hooked_model));
+    BOOL localized = DIMSwizzleInstanceMethod(cls, @selector(localizedModel),
+                                               @selector(dim_hooked_localizedModel));
+    BOOL version = DIMSwizzleInstanceMethod(cls, @selector(systemVersion),
+                                             @selector(dim_hooked_systemVersion));
 
     NSLog(@"[DIM] UIDevice hooks: model=%d localized=%d version=%d",
           model, localized, version);
@@ -580,7 +429,7 @@ static void DIMInstallUIDeviceHooks(void) {
           UIDevice.currentDevice.systemVersion);
 }
 
-#pragma mark - fishhook implementation
+#pragma mark - fishhook
 
 struct DIMRebinding {
     const char *name;
@@ -596,51 +445,33 @@ struct DIMRebindingsEntry {
 
 static struct DIMRebindingsEntry *DIMRebindingsHead = NULL;
 
-static BOOL DIMLinkeditRangeValid(
-    uint32_t offset,
-    size_t length,
-    uint64_t fileoff,
-    uint64_t filesize
-) {
-    if ((uint64_t)offset < fileoff)
-        return NO;
+static BOOL DIMLinkeditRangeValid(uint32_t offset, size_t length,
+                                  uint64_t fileoff, uint64_t filesize) {
+    if ((uint64_t)offset < fileoff) return NO;
 
     uint64_t relative = (uint64_t)offset - fileoff;
-
-    if (relative > filesize)
-        return NO;
-
-    if ((uint64_t)length > filesize - relative)
-        return NO;
+    if (relative > filesize) return NO;
+    if ((uint64_t)length > filesize - relative) return NO;
 
     return YES;
 }
 
-static BOOL DIMMakePointerWritable(void **pointer,
-                                   vm_prot_t *oldProtection) {
-    if (!pointer || !oldProtection)
-        return NO;
+static BOOL DIMMakePointerWritable(void **pointer, vm_prot_t *oldProtection) {
+    if (!pointer || !oldProtection) return NO;
 
-    vm_address_t address =
-        (vm_address_t)((uintptr_t)pointer &
-        ~((uintptr_t)vm_page_size - 1));
+    vm_address_t address = (vm_address_t)((uintptr_t)pointer &
+                             ~((uintptr_t)vm_page_size - 1));
 
     vm_size_t regionSize = 0;
     vm_region_basic_info_data_64_t info;
-    mach_msg_type_number_t infoCount =
-        VM_REGION_BASIC_INFO_COUNT_64;
+    mach_msg_type_number_t infoCount = VM_REGION_BASIC_INFO_COUNT_64;
     mach_port_t objectName = MACH_PORT_NULL;
-
     vm_address_t regionAddress = address;
 
     kern_return_t kr = vm_region_64(
-        mach_task_self(),
-        &regionAddress,
-        &regionSize,
-        VM_REGION_BASIC_INFO_64,
-        (vm_region_info_t)&info,
-        &infoCount,
-        &objectName
+        mach_task_self(), &regionAddress, &regionSize,
+        VM_REGION_BASIC_INFO_64, (vm_region_info_t)&info,
+        &infoCount, &objectName
     );
 
     if (kr != KERN_SUCCESS) {
@@ -653,13 +484,8 @@ static BOOL DIMMakePointerWritable(void **pointer,
     vm_prot_t writableProtection =
         info.protection | VM_PROT_READ | VM_PROT_WRITE | VM_PROT_COPY;
 
-    kr = vm_protect(
-        mach_task_self(),
-        address,
-        vm_page_size,
-        FALSE,
-        writableProtection
-    );
+    kr = vm_protect(mach_task_self(), address, vm_page_size,
+                    FALSE, writableProtection);
 
     if (kr != KERN_SUCCESS) {
         DIMProtectionFailures++;
@@ -669,30 +495,16 @@ static BOOL DIMMakePointerWritable(void **pointer,
     return YES;
 }
 
-static void DIMRestorePointerProtection(
-    void **pointer,
-    vm_prot_t oldProtection
-) {
-    if (!pointer)
-        return;
+static void DIMRestorePointerProtection(void **pointer, vm_prot_t oldProtection) {
+    if (!pointer) return;
 
-    vm_address_t address =
-        (vm_address_t)((uintptr_t)pointer &
-        ~((uintptr_t)vm_page_size - 1));
+    vm_address_t address = (vm_address_t)((uintptr_t)pointer &
+                             ~((uintptr_t)vm_page_size - 1));
 
-    vm_protect(
-        mach_task_self(),
-        address,
-        vm_page_size,
-        FALSE,
-        oldProtection
-    );
+    vm_protect(mach_task_self(), address, vm_page_size, FALSE, oldProtection);
 }
 
-static void DIMRebindImage(
-    const struct mach_header *header,
-    intptr_t slide
-) {
+static void DIMRebindImage(const struct mach_header *header, intptr_t slide) {
     if (!header || header->magic != MH_MAGIC_64) {
         DIMInvalidImages++;
         return;
@@ -700,9 +512,7 @@ static void DIMRebindImage(
 
     DIMImagesScanned++;
 
-    const struct mach_header_64 *header64 =
-        (const struct mach_header_64 *)header;
-
+    const struct mach_header_64 *header64 = (const struct mach_header_64 *)header;
     const struct load_command *command =
         (const struct load_command *)(header64 + 1);
 
@@ -711,12 +521,10 @@ static void DIMRebindImage(
     const struct segment_command_64 *linkedit = NULL;
 
     uintptr_t commandStart = (uintptr_t)command;
-    uintptr_t commandEnd =
-        commandStart + header64->sizeofcmds;
+    uintptr_t commandEnd = commandStart + header64->sizeofcmds;
 
     for (uint32_t i = 0; i < header64->ncmds; i++) {
-        if ((uintptr_t)command + sizeof(struct load_command) >
-            commandEnd) {
+        if ((uintptr_t)command + sizeof(struct load_command) > commandEnd) {
             DIMInvalidImages++;
             return;
         }
@@ -742,50 +550,37 @@ static void DIMRebindImage(
             const struct segment_command_64 *segment =
                 (const struct segment_command_64 *)command;
 
-            if (strcmp(segment->segname, SEG_LINKEDIT) == 0)
+            if (strcmp(segment->segname, SEG_LINKEDIT) == 0) {
                 linkedit = segment;
+            }
         }
 
-        command = (const struct load_command *)(
-            (uintptr_t)command + command->cmdsize
-        );
+        command = (const struct load_command *)((uintptr_t)command + command->cmdsize);
     }
 
-    if (!symtab || !dysymtab || !linkedit)
-        return;
+    if (!symtab || !dysymtab || !linkedit) return;
 
     DIMLinkeditFound++;
 
-    if (!DIMLinkeditRangeValid(
-            symtab->symoff,
+    if (!DIMLinkeditRangeValid(symtab->symoff,
             (size_t)symtab->nsyms * sizeof(struct nlist_64),
-            linkedit->fileoff,
-            linkedit->filesize) ||
-        !DIMLinkeditRangeValid(
-            symtab->stroff,
-            symtab->strsize,
-            linkedit->fileoff,
-            linkedit->filesize) ||
-        !DIMLinkeditRangeValid(
-            dysymtab->indirectsymoff,
+            linkedit->fileoff, linkedit->filesize) ||
+        !DIMLinkeditRangeValid(symtab->stroff, symtab->strsize,
+            linkedit->fileoff, linkedit->filesize) ||
+        !DIMLinkeditRangeValid(dysymtab->indirectsymoff,
             (size_t)dysymtab->nindirectsyms * sizeof(uint32_t),
-            linkedit->fileoff,
-            linkedit->filesize)) {
+            linkedit->fileoff, linkedit->filesize)) {
         DIMInvalidImages++;
         return;
     }
 
-    uintptr_t linkeditBase =
-        (uintptr_t)slide +
-        (uintptr_t)linkedit->vmaddr -
-        (uintptr_t)linkedit->fileoff;
+    uintptr_t linkeditBase = (uintptr_t)slide +
+                             (uintptr_t)linkedit->vmaddr -
+                             (uintptr_t)linkedit->fileoff;
 
     struct nlist_64 *symbols =
         (struct nlist_64 *)(linkeditBase + symtab->symoff);
-
-    char *strings =
-        (char *)(linkeditBase + symtab->stroff);
-
+    char *strings = (char *)(linkeditBase + symtab->stroff);
     uint32_t *indirectSymbols =
         (uint32_t *)(linkeditBase + dysymtab->indirectsymoff);
 
@@ -795,16 +590,20 @@ static void DIMRebindImage(
         if (command->cmd == LC_SEGMENT_64) {
             const struct segment_command_64 *segment =
                 (const struct segment_command_64 *)command;
-
             const struct section_64 *section =
                 (const struct section_64 *)(segment + 1);
 
-            for (uint32_t sectionIndex = 0;
-                 sectionIndex < segment->nsects;
-                 sectionIndex++) {
+            if (segment->nsects >
+                (command->cmdsize - sizeof(struct segment_command_64)) /
+                sizeof(struct section_64)) {
+                DIMInvalidImages++;
+                return;
+            }
 
-                uint32_t sectionType =
-                    section[sectionIndex].flags & SECTION_TYPE;
+            for (uint32_t sectionIndex = 0;
+                 sectionIndex < segment->nsects; sectionIndex++) {
+
+                uint32_t sectionType = section[sectionIndex].flags & SECTION_TYPE;
 
                 if (sectionType != S_LAZY_SYMBOL_POINTERS &&
                     sectionType != S_NON_LAZY_SYMBOL_POINTERS) {
@@ -813,76 +612,54 @@ static void DIMRebindImage(
 
                 DIMPointerSectionsFound++;
 
-                uint32_t pointerCount =
-                    (uint32_t)(
-                        section[sectionIndex].size /
-                        sizeof(void *)
-                    );
+                uint32_t pointerCount = (uint32_t)(
+                    section[sectionIndex].size / sizeof(void *)
+                );
 
-                uint32_t indirectIndex =
-                    section[sectionIndex].reserved1;
+                uint32_t indirectIndex = section[sectionIndex].reserved1;
 
                 if (indirectIndex > dysymtab->nindirectsyms ||
-                    pointerCount >
-                    dysymtab->nindirectsyms - indirectIndex) {
+                    pointerCount > dysymtab->nindirectsyms - indirectIndex) {
                     DIMInvalidImages++;
                     continue;
                 }
 
-                void **bindings =
-                    (void **)(slide +
-                    section[sectionIndex].addr);
+                void **bindings = (void **)(slide + section[sectionIndex].addr);
 
                 for (uint32_t pointerIndex = 0;
-                     pointerIndex < pointerCount;
-                     pointerIndex++) {
+                     pointerIndex < pointerCount; pointerIndex++) {
 
                     uint32_t symbolIndex =
                         indirectSymbols[indirectIndex + pointerIndex];
 
                     if (symbolIndex == INDIRECT_SYMBOL_ABS ||
                         symbolIndex == INDIRECT_SYMBOL_LOCAL ||
-                        symbolIndex == (INDIRECT_SYMBOL_LOCAL |
-                                        INDIRECT_SYMBOL_ABS)) {
+                        symbolIndex == (INDIRECT_SYMBOL_LOCAL | INDIRECT_SYMBOL_ABS)) {
                         continue;
                     }
 
-                    if (symbolIndex >= symtab->nsyms)
-                        continue;
+                    if (symbolIndex >= symtab->nsyms) continue;
 
-                    uint32_t stringIndex =
-                        symbols[symbolIndex].n_un.n_strx;
+                    uint32_t stringIndex = symbols[symbolIndex].n_un.n_strx;
+                    if (stringIndex >= symtab->strsize) continue;
 
-                    if (stringIndex >= symtab->strsize)
-                        continue;
-
-                    const char *symbolName =
-                        strings + stringIndex;
-
-                    if (!symbolName || symbolName[0] != '_')
-                        continue;
+                    const char *symbolName = strings + stringIndex;
+                    if (!symbolName || symbolName[0] != '_') continue;
 
                     symbolName++;
 
-                    for (struct DIMRebindingsEntry *entry =
-                             DIMRebindingsHead;
-                         entry;
-                         entry = entry->next) {
+                    for (struct DIMRebindingsEntry *entry = DIMRebindingsHead;
+                         entry; entry = entry->next) {
 
                         for (size_t bindingIndex = 0;
-                             bindingIndex < entry->count;
-                             bindingIndex++) {
+                             bindingIndex < entry->count; bindingIndex++) {
 
                             struct DIMRebinding *rebinding =
                                 &entry->rebindings[bindingIndex];
 
-                            if (strcmp(symbolName,
-                                       rebinding->name) != 0) {
-                                continue;
-                            }
+                            if (strcmp(symbolName, rebinding->name) != 0) continue;
 
-                            void **slot =
-                                &bindings[pointerIndex];
+                            void **slot = &bindings[pointerIndex];
 
                             if (rebinding->replaced &&
                                 *rebinding->replaced == NULL) {
@@ -892,17 +669,9 @@ static void DIMRebindImage(
                             if (*slot != rebinding->replacement) {
                                 vm_prot_t oldProtection = 0;
 
-                                if (DIMMakePointerWritable(
-                                        slot,
-                                        &oldProtection)) {
-
+                                if (DIMMakePointerWritable(slot, &oldProtection)) {
                                     *slot = rebinding->replacement;
-
-                                    DIMRestorePointerProtection(
-                                        slot,
-                                        oldProtection
-                                    );
-
+                                    DIMRestorePointerProtection(slot, oldProtection);
                                     DIMSymbolsReplaced++;
                                 }
                             }
@@ -912,44 +681,36 @@ static void DIMRebindImage(
             }
         }
 
-        command = (const struct load_command *)(
-            (uintptr_t)command + command->cmdsize
-        );
+        command = (const struct load_command *)((uintptr_t)command + command->cmdsize);
     }
 }
 
-static void DIMAddImage(
-    const struct mach_header *header,
-    intptr_t slide
-) {
+static void DIMAddImage(const struct mach_header *header, intptr_t slide) {
     DIMRebindImage(header, slide);
 }
 
-static int DIMRebindSymbols(
-    struct DIMRebinding rebindings[],
-    size_t count
-) {
-    if (!rebindings || count == 0)
-        return -1;
+static int DIMRebindSymbols(struct DIMRebinding rebindings[], size_t count) {
+    if (!rebindings || count == 0) return -1;
 
+    // Explicit casts are required because Tweak.xm is compiled as Objective-C++.
     struct DIMRebindingsEntry *entry =
-        calloc(1, sizeof(struct DIMRebindingsEntry));
+        (struct DIMRebindingsEntry *)calloc(
+            1, sizeof(struct DIMRebindingsEntry)
+        );
 
-    if (!entry)
-        return -1;
+    if (!entry) return -1;
 
-    entry->rebindings = calloc(count, sizeof(struct DIMRebinding));
+    entry->rebindings =
+        (struct DIMRebinding *)calloc(
+            count, sizeof(struct DIMRebinding)
+        );
 
     if (!entry->rebindings) {
         free(entry);
         return -1;
     }
 
-    memcpy(
-        entry->rebindings,
-        rebindings,
-        count * sizeof(struct DIMRebinding)
-    );
+    memcpy(entry->rebindings, rebindings, count * sizeof(struct DIMRebinding));
 
     entry->count = count;
     entry->next = NULL;
@@ -959,18 +720,11 @@ static int DIMRebindSymbols(
     } else {
         struct DIMRebindingsEntry *tail = DIMRebindingsHead;
 
-        while (tail->next)
-            tail = tail->next;
-
+        while (tail->next) tail = tail->next;
         tail->next = entry;
     }
 
-    /*
-     * This registers the callback for existing images and
-     * automatically processes images loaded later.
-     */
     _dyld_register_func_for_add_image(DIMAddImage);
-
     return 0;
 }
 
@@ -978,26 +732,10 @@ static int DIMRebindSymbols(
 
 static void DIMInstallFishhook(void) {
     struct DIMRebinding rebindings[] = {
-        {
-            "sysctlbyname",
-            (void *)DIMHook_sysctlbyname,
-            (void **)&DIMOriginalSysctlByName
-        },
-        {
-            "sysctl",
-            (void *)DIMHook_sysctl,
-            (void **)&DIMOriginalSysctl
-        },
-        {
-            "sysctlnametomib",
-            (void *)DIMHook_sysctlnametomib,
-            (void **)&DIMOriginalSysctlNameToMIB
-        },
-        {
-            "uname",
-            (void *)DIMHook_uname,
-            (void **)&DIMOriginalUname
-        }
+        {"sysctlbyname", (void *)DIMHook_sysctlbyname, (void **)&DIMOriginalSysctlByName},
+        {"sysctl", (void *)DIMHook_sysctl, (void **)&DIMOriginalSysctl},
+        {"sysctlnametomib", (void *)DIMHook_sysctlnametomib, (void **)&DIMOriginalSysctlNameToMIB},
+        {"uname", (void *)DIMHook_uname, (void **)&DIMOriginalUname}
     };
 
     int result = DIMRebindSymbols(
@@ -1012,9 +750,7 @@ static void DIMInstallFishhook(void) {
 
 %ctor {
     @autoreleasepool {
-        NSString *bundleID =
-            NSBundle.mainBundle.bundleIdentifier ?: @"";
-
+        NSString *bundleID = NSBundle.mainBundle.bundleIdentifier ?: @"";
         NSLog(@"[DIM] Loaded in process: %@", bundleID);
 
         DIMConfiguration = DIMLoadConfiguration();
@@ -1027,8 +763,6 @@ static void DIMInstallFishhook(void) {
         DIMInstallFishhook();
         DIMInstallUIDeviceHooks();
 
-        DIMHooksInstalled = YES;
-
         NSLog(@"[DIM] Installation complete");
         NSLog(@"[DIM] Profile: %@ / %@ / %@ (%@)",
               DIMValue(@"name"),
@@ -1037,8 +771,7 @@ static void DIMInstallFishhook(void) {
               DIMValue(@"build"));
 
         NSLog(@"[DIM] Fishhook stats: images=%lu linkedit=%lu "
-              "sections=%lu replaced=%lu protectionFailures=%lu "
-              "invalid=%lu",
+              "sections=%lu replaced=%lu protectionFailures=%lu invalid=%lu",
               (unsigned long)DIMImagesScanned,
               (unsigned long)DIMLinkeditFound,
               (unsigned long)DIMPointerSectionsFound,
