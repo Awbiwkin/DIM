@@ -20,6 +20,37 @@ static NSString * const DIMSelectedAppsKey = @"SelectedApps";
     return [[NSUserDefaults alloc] initWithSuiteName:DIMDomain];
 }
 
+- (UIImage *)iconForApplication:(id)application {
+    SEL iconSelector = NSSelectorFromString(@"iconDataForVariant:");
+
+    if (![application respondsToSelector:iconSelector]) {
+        return nil;
+    }
+
+    // Пробуем несколько вариантов размера иконки.
+    NSInteger variants[] = {2, 1, 0};
+
+    for (NSUInteger i = 0; i < sizeof(variants) / sizeof(variants[0]); i++) {
+        NSData *iconData = ((id (*)(id, SEL, NSInteger))objc_msgSend)(
+            application,
+            iconSelector,
+            variants[i]
+        );
+
+        if (![iconData isKindOfClass:NSData.class] || iconData.length == 0) {
+            continue;
+        }
+
+        UIImage *image = [UIImage imageWithData:iconData];
+
+        if (image) {
+            return image;
+        }
+    }
+
+    return nil;
+}
+
 - (NSArray<NSDictionary *> *)installedApps {
     NSMutableArray *result = [NSMutableArray array];
 
@@ -77,10 +108,18 @@ static NSString * const DIMSelectedAppsKey = @"SelectedApps";
             name = bundle;
         }
 
-        [result addObject:@{
+        UIImage *icon = [self iconForApplication:app];
+
+        NSMutableDictionary *entry = [@{
             @"name": name,
             @"bundle": bundle
-        }];
+        } mutableCopy];
+
+        if (icon) {
+            entry[@"icon"] = icon;
+        }
+
+        [result addObject:entry];
     }
 
     [result sortUsingComparator:^NSComparisonResult(
@@ -119,6 +158,8 @@ static NSString * const DIMSelectedAppsKey = @"SelectedApps";
     [self.searchBar sizeToFit];
 
     self.tableView.tableHeaderView = self.searchBar;
+
+    self.tableView.rowHeight = 64.0;
 
     self.navigationItem.rightBarButtonItem =
     [[UIBarButtonItem alloc]
@@ -202,6 +243,10 @@ static NSString * const DIMSelectedAppsKey = @"SelectedApps";
         cell = [[UITableViewCell alloc]
             initWithStyle:UITableViewCellStyleSubtitle
             reuseIdentifier:identifier];
+
+        cell.imageView.contentMode = UIViewContentModeScaleAspectFit;
+        cell.imageView.layer.cornerRadius = 10.0;
+        cell.imageView.clipsToBounds = YES;
     }
 
     NSDictionary *app = self.filteredApps[indexPath.row];
@@ -212,6 +257,10 @@ static NSString * const DIMSelectedAppsKey = @"SelectedApps";
 
     cell.textLabel.textColor = UIColor.labelColor;
     cell.detailTextLabel.textColor = UIColor.secondaryLabelColor;
+
+    UIImage *icon = app[@"icon"];
+
+    cell.imageView.image = icon;
 
     cell.accessoryType =
         [self.selectedApps containsObject:bundle]
