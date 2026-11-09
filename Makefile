@@ -1,10 +1,9 @@
-# Явно задаем путь к theos для GitHub Actions и локальной сборки
-THEOS ?= $(CURDIR)/theos
+export THEOS := $(shell pwd)/theos
+
+include $(THEOS)/makefiles/common.mk
 
 TARGET := iphone:clang:latest:15.0
 THEOS_PACKAGE_SCHEME = rootless
-
-include $(THEOS)/makefiles/common.mk
 
 TWEAK_NAME = DeviceIdentityManager
 
