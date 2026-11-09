@@ -10,66 +10,16 @@
 #import <errno.h>
 #import <string.h>
 
+#define DIM_PROFILE_MODEL  "iPhone 15 Pro Max"
+#define DIM_PROFILE_ID     "iPhone16,2"
+#define DIM_PROFILE_BOARD  "D84AP"
+#define DIM_PROFILE_IOS    "18.0"
+#define DIM_PROFILE_BUILD  "22A3354"
+#define DIM_PROFILE_DARWIN "24.0.0"
+
 #ifndef KERN_OSVERSION
 #define KERN_OSVERSION 65
 #endif
-
-// ------------------------------------------------------------
-// PROFILE
-// ------------------------------------------------------------
-
-static NSString *DIM_PROFILE_MODEL = nil;
-static NSString *DIM_PROFILE_ID = nil;
-static NSString *DIM_PROFILE_BOARD = nil;
-static NSString *DIM_PROFILE_IOS = nil;
-static NSString *DIM_PROFILE_BUILD = nil;
-static NSString *DIM_PROFILE_DARWIN = nil;
-
-static NSString *DIMKernelVersion = nil;
-static BOOL DIMInitialized = NO;
-
-static BOOL DIMLoadProfile(void) {
-    NSUserDefaults *prefs =
-        [[NSUserDefaults alloc] initWithSuiteName:@"com.dim.manager"];
-
-    if (!prefs)
-        return NO;
-
-    NSDictionary *profile =
-        [prefs dictionaryForKey:@"ActiveProfile"];
-
-    if (![profile isKindOfClass:[NSDictionary class]])
-        return NO;
-
-    NSString *model = profile[@"name"];
-    NSString *identifier = profile[@"identifier"];
-    NSString *board = profile[@"boardconfig"];
-    NSString *ios = profile[@"version"];
-    NSString *build = profile[@"build"];
-    NSString *darwin = profile[@"darwin"];
-
-    if (![model isKindOfClass:[NSString class]] || !model.length ||
-        ![identifier isKindOfClass:[NSString class]] || !identifier.length ||
-        ![board isKindOfClass:[NSString class]] || !board.length ||
-        ![ios isKindOfClass:[NSString class]] || !ios.length ||
-        ![build isKindOfClass:[NSString class]] || !build.length ||
-        ![darwin isKindOfClass:[NSString class]] || !darwin.length) {
-        return NO;
-    }
-
-    DIM_PROFILE_MODEL = [model copy];
-    DIM_PROFILE_ID = [identifier copy];
-    DIM_PROFILE_BOARD = [board copy];
-    DIM_PROFILE_IOS = [ios copy];
-    DIM_PROFILE_BUILD = [build copy];
-    DIM_PROFILE_DARWIN = [darwin copy];
-
-    return YES;
-}
-
-// ------------------------------------------------------------
-// ORIGINAL FUNCTIONS
-// ------------------------------------------------------------
 
 typedef int (*DIMSysctlByNameFn)(
     const char *, void *, size_t *, void *, size_t
@@ -84,6 +34,9 @@ typedef int (*DIMUnameFn)(struct utsname *);
 static DIMSysctlByNameFn DIMOriginalSysctlByName = NULL;
 static DIMSysctlFn DIMOriginalSysctl = NULL;
 static DIMUnameFn DIMOriginalUname = NULL;
+
+static NSString *DIMKernelVersion = nil;
+static BOOL DIMInitialized = NO;
 
 // ------------------------------------------------------------
 // SYSCTL OUTPUT
@@ -126,8 +79,7 @@ static void DIMPrepareKernelVersion(void) {
     struct utsname info;
     memset(&info, 0, sizeof(info));
 
-    if (uname(&info) != 0)
-        return;
+    if (uname(&info) != 0) return;
 
     NSString *original =
         [NSString stringWithUTF8String:info.version];
@@ -135,13 +87,12 @@ static void DIMPrepareKernelVersion(void) {
     NSString *release =
         [NSString stringWithUTF8String:info.release];
 
-    if (!original.length)
-        return;
+    if (!original.length) return;
 
     if (release.length) {
         DIMKernelVersion =
             [original stringByReplacingOccurrencesOfString:release
-                                                 withString:DIM_PROFILE_DARWIN];
+                                                 withString:@DIM_PROFILE_DARWIN];
     } else {
         DIMKernelVersion = original;
     }
@@ -152,20 +103,19 @@ static void DIMPrepareKernelVersion(void) {
 // ------------------------------------------------------------
 
 static const char *DIMReplacementForName(const char *name) {
-    if (!name)
-        return NULL;
+    if (!name) return NULL;
 
     if (strcmp(name, "hw.machine") == 0)
-        return DIM_PROFILE_ID.UTF8String;
+        return DIM_PROFILE_ID;
 
     if (strcmp(name, "hw.model") == 0)
-        return DIM_PROFILE_BOARD.UTF8String;
+        return DIM_PROFILE_BOARD;
 
     if (strcmp(name, "kern.osrelease") == 0)
-        return DIM_PROFILE_DARWIN.UTF8String;
+        return DIM_PROFILE_DARWIN;
 
     if (strcmp(name, "kern.osversion") == 0)
-        return DIM_PROFILE_BUILD.UTF8String;
+        return DIM_PROFILE_BUILD;
 
     if (strcmp(name, "kern.version") == 0)
         return DIMKernelVersion.UTF8String;
@@ -201,23 +151,22 @@ static int DIMHookSysctlByName(
 // ------------------------------------------------------------
 
 static const char *DIMReplacementForMIB(int *name, u_int length) {
-    if (!name || length != 2)
-        return NULL;
+    if (!name || length != 2) return NULL;
 
     if (name[0] == CTL_HW) {
         if (name[1] == HW_MACHINE)
-            return DIM_PROFILE_ID.UTF8String;
+            return DIM_PROFILE_ID;
 
         if (name[1] == HW_MODEL)
-            return DIM_PROFILE_BOARD.UTF8String;
+            return DIM_PROFILE_BOARD;
     }
 
     if (name[0] == CTL_KERN) {
         if (name[1] == KERN_OSRELEASE)
-            return DIM_PROFILE_DARWIN.UTF8String;
+            return DIM_PROFILE_DARWIN;
 
         if (name[1] == KERN_OSVERSION)
-            return DIM_PROFILE_BUILD.UTF8String;
+            return DIM_PROFILE_BUILD;
 
         if (name[1] == KERN_VERSION)
             return DIMKernelVersion.UTF8String;
@@ -266,15 +215,15 @@ static int DIMHookUname(struct utsname *info) {
     if (result != 0 || !info)
         return result;
 
-    strlcpy(info->machine, DIM_PROFILE_ID.UTF8String,
-            sizeof(info->machine));
-
-    strlcpy(info->release, DIM_PROFILE_DARWIN.UTF8String,
-            sizeof(info->release));
+    strlcpy(info->machine, DIM_PROFILE_ID, sizeof(info->machine));
+    strlcpy(info->release, DIM_PROFILE_DARWIN, sizeof(info->release));
 
     if (DIMKernelVersion.length) {
-        strlcpy(info->version, DIMKernelVersion.UTF8String,
-                sizeof(info->version));
+        strlcpy(
+            info->version,
+            DIMKernelVersion.UTF8String,
+            sizeof(info->version)
+        );
     }
 
     return 0;
@@ -285,15 +234,15 @@ static int DIMHookUname(struct utsname *info) {
 // ------------------------------------------------------------
 
 static NSString *DIMDeviceModel(id self, SEL selector) {
-    return DIM_PROFILE_MODEL;
+    return @DIM_PROFILE_MODEL;
 }
 
 static NSString *DIMDeviceLocalizedModel(id self, SEL selector) {
-    return DIM_PROFILE_MODEL;
+    return @DIM_PROFILE_MODEL;
 }
 
 static NSString *DIMDeviceSystemVersion(id self, SEL selector) {
-    return DIM_PROFILE_IOS;
+    return @DIM_PROFILE_IOS;
 }
 
 static void DIMReplaceInstanceMethod(
@@ -304,7 +253,7 @@ static void DIMReplaceInstanceMethod(
     if (!cls || !selector || !replacement)
         return;
 
-    Method method = class_getInstanceMethod(cls, selector);
+    auto method = class_getInstanceMethod(cls, selector);
 
     if (!method)
         return;
@@ -383,9 +332,6 @@ static void DIMInitialize(void) {
             [[NSBundle mainBundle] bundleIdentifier];
 
         if (![bundleID isEqualToString:@"ph.telegra.Telegraph"])
-            return;
-
-        if (!DIMLoadProfile())
             return;
 
         DIMInstallHooks();
