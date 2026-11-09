@@ -2,12 +2,12 @@
 #import <UIKit/UIKit.h>
 #import <Preferences/PSListController.h>
 #import <Preferences/PSSpecifier.h>
-#import <Preferences/PSListItemsController.h>
 #import "DIMCatalogManager.h"
 
 static NSString * const DIMDomain = @"com.dim.manager";
 
 @interface DIMDeviceListController : PSListController
+- (void)refreshCatalog;
 @end
 
 @implementation DIMDeviceListController
@@ -23,8 +23,8 @@ static NSString * const DIMDomain = @"com.dim.manager";
 - (PSSpecifier *)makeGroup:(NSString *)title {
     return [PSSpecifier preferenceSpecifierNamed:title
                                            target:nil
-                                              set:nil
-                                              get:nil
+                                              set:NULL
+                                              get:NULL
                                            detail:nil
                                              cell:PSGroupCell
                                              edit:nil];
@@ -33,8 +33,8 @@ static NSString * const DIMDomain = @"com.dim.manager";
 - (PSSpecifier *)makeStatus:(NSString *)title {
     return [PSSpecifier preferenceSpecifierNamed:title
                                            target:nil
-                                              set:nil
-                                              get:nil
+                                              set:NULL
+                                              get:NULL
                                            detail:nil
                                              cell:PSStaticTextCell
                                              edit:nil];
@@ -46,12 +46,14 @@ static NSString * const DIMDomain = @"com.dim.manager";
                    values:(NSArray *)values
                   default:(id)defaultValue {
 
+    Class listController = NSClassFromString(@"PSListItemsController");
+
     PSSpecifier *specifier =
     [PSSpecifier preferenceSpecifierNamed:title
                                     target:self
                                        set:@selector(setPreferenceValue:specifier:)
                                        get:@selector(readPreferenceValue:)
-                                    detail:[PSListItemsController class]
+                                    detail:listController
                                       cell:PSLinkListCell
                                       edit:nil];
 
@@ -60,16 +62,17 @@ static NSString * const DIMDomain = @"com.dim.manager";
     [specifier setProperty:titles forKey:@"validTitles"];
     [specifier setProperty:values forKey:@"validValues"];
     [specifier setProperty:defaultValue forKey:@"default"];
+    [specifier setProperty:@YES forKey:@"enabled"];
 
     return specifier;
 }
 
-#pragma mark - Catalog
+#pragma mark - Catalog Information
 
 - (NSString *)formattedUpdateDate {
     NSDate *date = [[DIMCatalogManager sharedManager] lastUpdateDate];
 
-    if (!date) {
+    if (![date isKindOfClass:[NSDate class]]) {
         return @"Never updated";
     }
 
@@ -80,7 +83,13 @@ static NSString * const DIMDomain = @"com.dim.manager";
     return [formatter stringFromDate:date];
 }
 
+#pragma mark - Refresh Button
+
 - (void)refreshCatalog {
+    if (self.presentedViewController) {
+        return;
+    }
+
     UIAlertController *loading =
     [UIAlertController alertControllerWithTitle:@"Updating Catalog"
                                         message:@"Connecting to IPSW.info and AppleDB..."
@@ -96,18 +105,18 @@ static NSString * const DIMDomain = @"com.dim.manager";
             self->_specifiers = nil;
             [self reloadSpecifiers];
 
-            UIAlertController *alert =
+            UIAlertController *result =
             [UIAlertController alertControllerWithTitle:
              (success ? @"Catalog Updated" : @"Update Failed")
                                                  message:message
                                           preferredStyle:UIAlertControllerStyleAlert];
 
-            [alert addAction:
+            [result addAction:
              [UIAlertAction actionWithTitle:@"OK"
                                       style:UIAlertActionStyleDefault
                                     handler:nil]];
 
-            [self presentViewController:alert animated:YES completion:nil];
+            [self presentViewController:result animated:YES completion:nil];
         }];
     }];
 }
@@ -127,9 +136,12 @@ static NSString * const DIMDomain = @"com.dim.manager";
     NSString *family =
     [prefs stringForKey:@"DeviceFamily"] ?: @"iPhone";
 
-    BOOL isIPad = [family isEqualToString:@"iPad"];
+    if (![family isEqualToString:@"iPad"]) {
+        family = @"iPhone";
+    }
 
-    NSString *osFamily = isIPad ? @"iPadOS" : @"iOS";
+    NSString *osFamily =
+    [family isEqualToString:@"iPad"] ? @"iPadOS" : @"iOS";
 
     // CATALOG
 
@@ -138,14 +150,16 @@ static NSString * const DIMDomain = @"com.dim.manager";
     PSSpecifier *refresh =
     [PSSpecifier preferenceSpecifierNamed:@"Refresh Catalog"
                                     target:self
-                                       set:nil
-                                       get:nil
+                                       set:NULL
+                                       get:NULL
                                     detail:nil
                                       cell:PSButtonCell
                                       edit:nil];
 
-    [refresh setProperty:NSStringFromSelector(@selector(refreshCatalog))
-                  forKey:@"action"];
+    refresh.target = self;
+    refresh.buttonAction = @selector(refreshCatalog);
+
+    [refresh setProperty:@YES forKey:@"enabled"];
 
     [items addObject:refresh];
 
@@ -154,7 +168,8 @@ static NSString * const DIMDomain = @"com.dim.manager";
       [NSString stringWithFormat:@"Last update: %@",
        [self formattedUpdateDate]]]];
 
-    [items addObject:[self makeStatus:[catalog catalogStatus]]];
+    [items addObject:
+     [self makeStatus:[catalog catalogStatus]]];
 
     // DEVICE FAMILY
 
@@ -177,6 +192,10 @@ static NSString * const DIMDomain = @"com.dim.manager";
     NSMutableArray *deviceValues = [NSMutableArray array];
 
     for (NSDictionary *device in devices) {
+        if (![device isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+
         NSString *name = device[@"name"];
         NSString *identifier = device[@"identifier"];
 
@@ -194,6 +213,7 @@ static NSString * const DIMDomain = @"com.dim.manager";
     NSString *selectedModel = [prefs stringForKey:@"SelectedModel"];
 
     if (deviceValues.count > 0) {
+
         if (![deviceValues containsObject:selectedModel]) {
             selectedModel = deviceValues.firstObject;
         }
@@ -206,6 +226,7 @@ static NSString * const DIMDomain = @"com.dim.manager";
                 default:selectedModel]];
 
         for (NSDictionary *device in devices) {
+
             if (![device[@"identifier"] isEqualToString:selectedModel]) {
                 continue;
             }
@@ -236,8 +257,10 @@ static NSString * const DIMDomain = @"com.dim.manager";
         }
 
     } else {
+
         [items addObject:
-         [self makeStatus:@"No cached devices. Tap Refresh Catalog."]];
+         [self makeStatus:
+          @"No cached devices. Tap Refresh Catalog."]];
     }
 
     // OPERATING SYSTEM
@@ -250,10 +273,16 @@ static NSString * const DIMDomain = @"com.dim.manager";
     NSMutableArray *versionValues = [NSMutableArray array];
 
     for (NSDictionary *version in versions) {
+
+        if (![version isKindOfClass:[NSDictionary class]]) {
+            continue;
+        }
+
         NSString *number = version[@"version"];
         NSString *build = version[@"build"];
 
-        if (![number isKindOfClass:[NSString class]] || number.length == 0) {
+        if (![number isKindOfClass:[NSString class]] ||
+            number.length == 0) {
             continue;
         }
 
@@ -275,6 +304,7 @@ static NSString * const DIMDomain = @"com.dim.manager";
     }
 
     if (versionValues.count > 0) {
+
         NSString *selectedVersion =
         [prefs stringForKey:@"SelectedVersion"] ?: @"";
 
@@ -296,6 +326,7 @@ static NSString * const DIMDomain = @"com.dim.manager";
                 default:selectedValue]];
 
     } else {
+
         [items addObject:
          [self makeStatus:
           [NSString stringWithFormat:
@@ -334,6 +365,7 @@ static NSString * const DIMDomain = @"com.dim.manager";
 #pragma mark - Save Preferences
 
 - (void)setPreferenceValue:(id)value specifier:(PSSpecifier *)specifier {
+
     [super setPreferenceValue:value specifier:specifier];
 
     NSString *key = [specifier propertyForKey:@"key"];
@@ -341,6 +373,7 @@ static NSString * const DIMDomain = @"com.dim.manager";
     NSUserDefaults *prefs = [self prefs];
 
     if ([key isEqualToString:@"DeviceFamily"]) {
+
         [prefs removeObjectForKey:@"SelectedModel"];
         [prefs removeObjectForKey:@"SelectedVersion"];
         [prefs removeObjectForKey:@"SelectedBuild"];
@@ -353,6 +386,7 @@ static NSString * const DIMDomain = @"com.dim.manager";
         NSArray *parts = [value componentsSeparatedByString:@"|"];
 
         if (parts.count >= 2) {
+
             [prefs setObject:parts[0] forKey:@"SelectedVersion"];
 
             if ([parts[1] length] > 0) {
