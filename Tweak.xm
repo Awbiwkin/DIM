@@ -1,14 +1,17 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <objc/runtime.h>
+
 #import <sys/types.h>
 #import <sys/sysctl.h>
 #import <sys/utsname.h>
+
 #import <mach/mach.h>
 #import <mach-o/dyld.h>
 #import <mach-o/loader.h>
 #import <mach-o/nlist.h>
-#import <pthread.h>
+
 #import <stdint.h>
 #import <stdlib.h>
 #import <string.h>
@@ -16,6 +19,12 @@
 #import <errno.h>
 
 static NSString * const DIMDomain = @"com.dim.manager";
+
+// ============================================================
+// ORIGINAL SYSTEM VERSION
+// ============================================================
+
+static NSString *DIMOriginalSystemVersion = nil;
 
 // ============================================================
 // FISHHOOK
@@ -35,6 +44,22 @@ struct DIMRebindingsEntry {
 
 static struct DIMRebindingsEntry *DIMRebindingsHead = NULL;
 
+static int (*DIMOriginalSysctlByName)(
+    const char *, void *, size_t *, void *, size_t
+) = NULL;
+
+static int (*DIMOriginalSysctl)(
+    int *, u_int, void *, size_t *, void *, size_t
+) = NULL;
+
+static int (*DIMOriginalSysctlNameToMIB)(
+    const char *, int *, size_t *
+) = NULL;
+
+static int (*DIMOriginalUname)(
+    struct utsname *
+) = NULL;
+
 static void DIMPerformRebinding(
     struct mach_header_64 *header,
     intptr_t slide,
@@ -42,7 +67,9 @@ static void DIMPerformRebinding(
     struct symtab_command *symtab,
     struct dysymtab_command *dysymtab
 ) {
-    if (!header || !linkedit || !symtab || !dysymtab) return;
+    if (!header || !linkedit || !symtab || !dysymtab) {
+        return;
+    }
 
     uintptr_t linkeditBase =
         (uintptr_t)slide +
@@ -58,12 +85,11 @@ static void DIMPerformRebinding(
     uint32_t *indirect =
         (uint32_t *)(linkeditBase + dysymtab->indirectsymoff);
 
-    uintptr_t *cursor =
-        (uintptr_t *)((uintptr_t)header +
-        sizeof(struct mach_header_64));
-
     struct load_command *command =
-        (struct load_command *)cursor;
+        (struct load_command *)(
+            (uintptr_t)header +
+            sizeof(struct mach_header_64)
+        );
 
     for (uint32_t i = 0; i < header->ncmds; i++) {
         if (command->cmd == LC_SEGMENT_64) {
@@ -89,7 +115,9 @@ static void DIMPerformRebinding(
                     (uintptr_t *)(slide + sections[j].addr);
 
                 uint32_t count =
-                    (uint32_t)(sections[j].size / sizeof(uintptr_t));
+                    (uint32_t)(
+                        sections[j].size / sizeof(uintptr_t)
+                    );
 
                 for (uint32_t k = 0; k < count; k++) {
                     uint32_t index =
@@ -97,8 +125,10 @@ static void DIMPerformRebinding(
 
                     if (index == INDIRECT_SYMBOL_ABS ||
                         index == INDIRECT_SYMBOL_LOCAL ||
-                        index == (INDIRECT_SYMBOL_LOCAL |
-                                  INDIRECT_SYMBOL_ABS)) {
+                        index == (
+                            INDIRECT_SYMBOL_LOCAL |
+                            INDIRECT_SYMBOL_ABS
+                        )) {
                         continue;
                     }
 
@@ -109,17 +139,20 @@ static void DIMPerformRebinding(
                         continue;
                     }
 
-                    for (struct DIMRebindingsEntry *entry =
-                         DIMRebindingsHead;
-                         entry;
-                         entry = entry->next) {
-
+                    for (
+                        struct DIMRebindingsEntry *entry =
+                            DIMRebindingsHead;
+                        entry;
+                        entry = entry->next
+                    ) {
                         for (size_t r = 0; r < entry->count; r++) {
                             struct DIMRebinding *binding =
                                 &entry->rebindings[r];
 
-                            if (strcmp(symbolName + 1,
-                                       binding->name) != 0) {
+                            if (strcmp(
+                                symbolName + 1,
+                                binding->name
+                            ) != 0) {
                                 continue;
                             }
 
@@ -133,7 +166,8 @@ static void DIMPerformRebinding(
                                 (vm_address_t)&bindings[k];
 
                             vm_address_t page =
-                                address & ~((vm_address_t)vm_page_size - 1);
+                                address &
+                                ~((vm_address_t)vm_page_size - 1);
 
                             vm_protect(
                                 mach_task_self(),
@@ -163,7 +197,9 @@ static void DIMRebindImage(
     const struct mach_header *header,
     intptr_t slide
 ) {
-    if (!header || header->magic != MH_MAGIC_64) return;
+    if (!header || header->magic != MH_MAGIC_64) {
+        return;
+    }
 
     struct mach_header_64 *header64 =
         (struct mach_header_64 *)header;
@@ -183,7 +219,10 @@ static void DIMRebindImage(
             struct segment_command_64 *segment =
                 (struct segment_command_64 *)command;
 
-            if (strcmp(segment->segname, SEG_LINKEDIT) == 0) {
+            if (strcmp(
+                segment->segname,
+                SEG_LINKEDIT
+            ) == 0) {
                 linkedit = segment;
             }
         } else if (command->cmd == LC_SYMTAB) {
@@ -222,7 +261,9 @@ static int DIMRebindSymbols(
             sizeof(struct DIMRebindingsEntry)
         );
 
-    if (!entry) return -1;
+    if (!entry) {
+        return -1;
+    }
 
     entry->rebindings =
         (struct DIMRebinding *)malloc(
@@ -250,26 +291,6 @@ static int DIMRebindSymbols(
 }
 
 // ============================================================
-// ORIGINAL FUNCTIONS
-// ============================================================
-
-static int (*DIMOriginalSysctlByName)(
-    const char *, void *, size_t *, void *, size_t
-) = NULL;
-
-static int (*DIMOriginalSysctl)(
-    int *, u_int, void *, size_t *, void *, size_t
-) = NULL;
-
-static int (*DIMOriginalSysctlNameToMIB)(
-    const char *, int *, size_t *
-) = NULL;
-
-static int (*DIMOriginalUname)(
-    struct utsname *
-) = NULL;
-
-// ============================================================
 // CONFIGURATION
 // ============================================================
 
@@ -289,7 +310,9 @@ static NSDictionary *DIMActiveConfiguration(void) {
     BOOL onlyIn =
         [prefs boolForKey:@"OnlyInEnabled"];
 
-    if (!global && !onlyIn) return nil;
+    if (!global && !onlyIn) {
+        return nil;
+    }
 
     NSString *bundleID =
         NSBundle.mainBundle.bundleIdentifier ?: @"";
@@ -327,20 +350,30 @@ static NSDictionary *DIMActiveConfiguration(void) {
 
     NSDictionary *device = nil;
 
-    for (NSDictionary *candidate in devices) {
-        if (![candidate isKindOfClass:NSDictionary.class]) {
-            continue;
-        }
+    if ([devices isKindOfClass:NSArray.class]) {
+        for (id candidate in devices) {
+            if (![candidate isKindOfClass:NSDictionary.class]) {
+                continue;
+            }
 
-        if ([candidate[@"identifier"]
-             isEqualToString:identifier]) {
-            device = candidate;
-            break;
+            if ([candidate[@"identifier"]
+                 isEqualToString:identifier]) {
+                device = candidate;
+                break;
+            }
         }
     }
 
-    NSString *marketingName =
-        device[@"name"] ?: identifier;
+    id nameValue = device[@"name"];
+    NSString *marketingName = nil;
+
+    if ([nameValue isKindOfClass:NSString.class]) {
+        marketingName = nameValue;
+    }
+
+    if (!marketingName.length) {
+        marketingName = identifier;
+    }
 
     id boardValue = device[@"boardconfig"];
     NSString *board = nil;
@@ -356,10 +389,6 @@ static NSDictionary *DIMActiveConfiguration(void) {
         }
     }
 
-    if (![marketingName isKindOfClass:NSString.class]) {
-        marketingName = identifier;
-    }
-
     return @{
         @"identifier": identifier,
         @"name": marketingName ?: @"",
@@ -373,7 +402,9 @@ static NSDictionary *DIMActiveConfiguration(void) {
 static NSString *DIMValue(NSString *key) {
     NSDictionary *config = DIMActiveConfiguration();
 
-    if (!config) return nil;
+    if (!config) {
+        return nil;
+    }
 
     id value = config[key];
 
@@ -385,82 +416,105 @@ static NSString *DIMValue(NSString *key) {
 }
 
 // ============================================================
-// DARWIN VERSION
+// ORIGINAL DARWIN RELEASE
+// ============================================================
+
+static NSString *DIMOriginalDarwinRelease(void) {
+    if (!DIMOriginalSysctlByName) {
+        return nil;
+    }
+
+    size_t size = 0;
+
+    if (DIMOriginalSysctlByName(
+        "kern.osrelease",
+        NULL,
+        &size,
+        NULL,
+        0
+    ) != 0 || size == 0) {
+        return nil;
+    }
+
+    char *buffer = (char *)calloc(1, size + 1);
+
+    if (!buffer) {
+        return nil;
+    }
+
+    NSString *result = nil;
+
+    if (DIMOriginalSysctlByName(
+        "kern.osrelease",
+        buffer,
+        &size,
+        NULL,
+        0
+    ) == 0) {
+        result = [NSString stringWithUTF8String:buffer];
+    }
+
+    free(buffer);
+
+    return result;
+}
+
+// ============================================================
+// DARWIN RELEASE MAPPING
 // ============================================================
 
 static NSString *DIMDarwinRelease(void) {
     NSString *version = DIMValue(@"version");
 
-    if (!version.length) return nil;
+    if (!version.length) {
+        return nil;
+    }
 
     NSArray *parts =
         [version componentsSeparatedByString:@"."];
 
-    NSInteger iosMajor =
+    NSInteger major =
         parts.count > 0 ? [parts[0] integerValue] : 0;
 
-    NSInteger iosMinor =
-        parts.count > 1 ? [parts[1] integerValue] : 0;
-
-    if (iosMajor <= 0) return nil;
-
-    NSInteger darwinMajor = 0;
-
-    if (iosMajor >= 26) {
-        darwinMajor = iosMajor - 1;
-    } else {
-        darwinMajor = iosMajor + 6;
+    if (major <= 0) {
+        return DIMOriginalDarwinRelease();
     }
 
-    NSInteger darwinMinor = MIN(iosMinor, 6);
+    // Major-version mapping.
+    // Minor Darwin versions are not inferred from iOS minor versions.
 
-    return [NSString stringWithFormat:
-        @"%ld.%ld.0",
-        (long)darwinMajor,
-        (long)darwinMinor];
+    NSDictionary *mapping = @{
+        @"9":  @"15.5.0",
+        @"10": @"16.5.0",
+        @"11": @"17.6.0",
+        @"12": @"18.7.0",
+        @"13": @"19.6.0",
+        @"14": @"20.6.0",
+        @"15": @"21.6.0",
+        @"16": @"22.6.0",
+        @"17": @"23.6.0",
+        @"18": @"24.5.0",
+        @"26": @"25.0.0"
+    };
+
+    NSString *mapped =
+        mapping[[NSString stringWithFormat:@"%ld", (long)major]];
+
+    if (mapped.length) {
+        return mapped;
+    }
+
+    return DIMOriginalDarwinRelease();
 }
 
 // ============================================================
-// BUFFER HELPERS
+// KERNEL VERSION
 // ============================================================
-
-static int DIMWriteString(
-    NSString *value,
-    void *oldp,
-    size_t *oldlenp
-) {
-    if (!value.length) return -1;
-
-    const char *string = value.UTF8String;
-    size_t required = strlen(string) + 1;
-
-    if (!oldlenp) {
-        errno = EFAULT;
-        return -1;
-    }
-
-    if (!oldp) {
-        *oldlenp = required;
-        return 0;
-    }
-
-    size_t available = *oldlenp;
-
-    if (available < required) {
-        memcpy(oldp, string, available);
-        *oldlenp = required;
-        errno = ENOMEM;
-        return -1;
-    }
-
-    memcpy(oldp, string, required);
-    *oldlenp = required;
-
-    return 0;
-}
 
 static NSString *DIMOriginalKernelVersion(void) {
-    if (!DIMOriginalSysctlByName) return nil;
+    if (!DIMOriginalSysctlByName) {
+        return nil;
+    }
 
     size_t size = 0;
 
@@ -476,7 +530,9 @@ static NSString *DIMOriginalKernelVersion(void) {
 
     char *buffer = (char *)calloc(1, size + 1);
 
-    if (!buffer) return nil;
+    if (!buffer) {
+        return nil;
+    }
 
     NSString *result = nil;
 
@@ -511,6 +567,7 @@ static NSString *DIMFakeKernelVersion(void) {
     }
 
     NSUInteger start = NSMaxRange(prefix);
+
     NSRange colon =
         [original rangeOfString:@":"
                         options:0
@@ -527,6 +584,52 @@ static NSString *DIMFakeKernelVersion(void) {
         [original substringToIndex:start],
         release,
         [original substringFromIndex:colon.location]];
+}
+
+// ============================================================
+// BUFFER HELPERS
+// ============================================================
+
+static int DIMWriteString(
+    NSString *value,
+    void *oldp,
+    size_t *oldlenp
+) {
+    if (!value.length) {
+        return -1;
+    }
+
+    if (!oldlenp) {
+        errno = EFAULT;
+        return -1;
+    }
+
+    const char *string = value.UTF8String;
+
+    if (!string) {
+        errno = EINVAL;
+        return -1;
+    }
+
+    size_t required = strlen(string) + 1;
+
+    if (!oldp) {
+        *oldlenp = required;
+        return 0;
+    }
+
+    size_t available = *oldlenp;
+
+    if (available < required) {
+        *oldlenp = required;
+        errno = ENOMEM;
+        return -1;
+    }
+
+    memcpy(oldp, string, required);
+    *oldlenp = required;
+
+    return 0;
 }
 
 // ============================================================
@@ -683,7 +786,9 @@ static int DIMHookUname(struct utsname *info) {
 
     int result = DIMOriginalUname(info);
 
-    if (result != 0 || !info) return result;
+    if (result != 0 || !info) {
+        return result;
+    }
 
     NSString *identifier = DIMValue(@"identifier");
     NSString *release = DIMDarwinRelease();
@@ -717,96 +822,109 @@ static int DIMHookUname(struct utsname *info) {
 }
 
 // ============================================================
-// OPERATING SYSTEM VERSION
+// UIDevice METHOD SWIZZLING
 // ============================================================
 
-static NSOperatingSystemVersion DIMVersionFromString(
-    NSString *string,
-    NSOperatingSystemVersion fallback
-) {
-    if (!string.length) return fallback;
+static IMP DIMOriginalDeviceModel = NULL;
+static IMP DIMOriginalDeviceLocalizedModel = NULL;
+static IMP DIMOriginalDeviceSystemVersion = NULL;
 
-    NSArray *parts =
-        [string componentsSeparatedByString:@"."];
-
-    NSOperatingSystemVersion result;
-
-    result.majorVersion =
-        parts.count > 0 ? [parts[0] integerValue] : 0;
-
-    result.minorVersion =
-        parts.count > 1 ? [parts[1] integerValue] : 0;
-
-    result.patchVersion =
-        parts.count > 2 ? [parts[2] integerValue] : 0;
-
-    return result.majorVersion > 0 ? result : fallback;
-}
-
-// ============================================================
-// UIDevice
-// ============================================================
-
-%hook UIDevice
-
-- (NSString *)systemVersion {
-    NSString *value = DIMValue(@"version");
-    return value.length ? value : %orig;
-}
-
-- (NSString *)model {
+static NSString *DIMDeviceModel(id self, SEL _cmd) {
     NSString *value = DIMValue(@"name");
-    return value.length ? value : %orig;
-}
 
-- (NSString *)localizedModel {
-    NSString *value = DIMValue(@"name");
-    return value.length ? value : %orig;
-}
-
-- (NSString *)buildVersion {
-    NSString *value = DIMValue(@"build");
-    return value.length ? value : %orig;
-}
-
-%end
-
-// ============================================================
-// NSPROCESSINFO
-// ============================================================
-
-%hook NSProcessInfo
-
-- (NSOperatingSystemVersion)operatingSystemVersion {
-    NSOperatingSystemVersion original = %orig;
-
-    return DIMVersionFromString(
-        DIMValue(@"version"),
-        original
-    );
-}
-
-- (NSString *)operatingSystemVersionString {
-    NSString *version = DIMValue(@"version");
-    NSString *build = DIMValue(@"build");
-
-    if (version.length) {
-        if (build.length) {
-            return [NSString stringWithFormat:
-                @"Version %@ (Build %@)",
-                version,
-                build];
-        }
-
-        return [NSString stringWithFormat:
-            @"Version %@",
-            version];
+    if (value.length) {
+        return value;
     }
 
-    return %orig;
+    if (DIMOriginalDeviceModel) {
+        return ((id (*)(id, SEL))DIMOriginalDeviceModel)(
+            self,
+            _cmd
+        );
+    }
+
+    return @"";
 }
 
-%end
+static NSString *DIMDeviceLocalizedModel(id self, SEL _cmd) {
+    NSString *value = DIMValue(@"name");
+
+    if (value.length) {
+        return value;
+    }
+
+    if (DIMOriginalDeviceLocalizedModel) {
+        return ((id (*)(id, SEL))DIMOriginalDeviceLocalizedModel)(
+            self,
+            _cmd
+        );
+    }
+
+    return @"";
+}
+
+static NSString *DIMDeviceSystemVersion(id self, SEL _cmd) {
+    NSString *value = DIMValue(@"version");
+
+    if (value.length) {
+        return value;
+    }
+
+    if (DIMOriginalDeviceSystemVersion) {
+        return ((id (*)(id, SEL))DIMOriginalDeviceSystemVersion)(
+            self,
+            _cmd
+        );
+    }
+
+    return @"";
+}
+
+static void DIMInstallUIDeviceHooks(void) {
+    Class deviceClass = [UIDevice class];
+
+    Method modelMethod =
+        class_getInstanceMethod(
+            deviceClass,
+            @selector(model)
+        );
+
+    Method localizedModelMethod =
+        class_getInstanceMethod(
+            deviceClass,
+            @selector(localizedModel)
+        );
+
+    Method systemVersionMethod =
+        class_getInstanceMethod(
+            deviceClass,
+            @selector(systemVersion)
+        );
+
+    if (modelMethod) {
+        DIMOriginalDeviceModel =
+            method_setImplementation(
+                modelMethod,
+                (IMP)DIMDeviceModel
+            );
+    }
+
+    if (localizedModelMethod) {
+        DIMOriginalDeviceLocalizedModel =
+            method_setImplementation(
+                localizedModelMethod,
+                (IMP)DIMDeviceLocalizedModel
+            );
+    }
+
+    if (systemVersionMethod) {
+        DIMOriginalDeviceSystemVersion =
+            method_setImplementation(
+                systemVersionMethod,
+                (IMP)DIMDeviceSystemVersion
+            );
+    }
+}
 
 // ============================================================
 // CONSTRUCTOR
@@ -814,6 +932,10 @@ static NSOperatingSystemVersion DIMVersionFromString(
 
 %ctor {
     @autoreleasepool {
+        // Capture the real version before installing hooks.
+        DIMOriginalSystemVersion =
+            [[UIDevice currentDevice] systemVersion];
+
         struct DIMRebinding rebindings[] = {
             {
                 "sysctlbyname",
@@ -842,6 +964,8 @@ static NSOperatingSystemVersion DIMVersionFromString(
             sizeof(rebindings) / sizeof(rebindings[0])
         );
 
+        DIMInstallUIDeviceHooks();
+
         NSString *bundleID =
             NSBundle.mainBundle.bundleIdentifier ?: @"unknown";
 
@@ -853,10 +977,11 @@ static NSOperatingSystemVersion DIMVersionFromString(
         if (config) {
             NSLog(@"[DIM] Identity active: %@", bundleID);
             NSLog(@"[DIM] Identifier: %@", config[@"identifier"]);
-            NSLog(@"[DIM] Name: %@", config[@"name"]);
-            NSLog(@"[DIM] Board: %@", config[@"board"]);
+            NSLog(@"[DIM] Product: %@", config[@"name"]);
+            NSLog(@"[DIM] Internal name: %@", config[@"board"]);
             NSLog(@"[DIM] iOS: %@", config[@"version"]);
             NSLog(@"[DIM] Build: %@", config[@"build"]);
+            NSLog(@"[DIM] Original iOS: %@", DIMOriginalSystemVersion);
         } else {
             NSLog(@"[DIM] Identity inactive: %@", bundleID);
         }
