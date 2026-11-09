@@ -218,12 +218,16 @@ static int DIMRebindSymbols(
     size_t count
 ) {
     struct DIMRebindingsEntry *entry =
-        malloc(sizeof(struct DIMRebindingsEntry));
+        (struct DIMRebindingsEntry *)malloc(
+            sizeof(struct DIMRebindingsEntry)
+        );
 
     if (!entry) return -1;
 
     entry->rebindings =
-        malloc(sizeof(struct DIMRebinding) * count);
+        (struct DIMRebinding *)malloc(
+            sizeof(struct DIMRebinding) * count
+        );
 
     if (!entry->rebindings) {
         free(entry);
@@ -338,15 +342,22 @@ static NSDictionary *DIMActiveConfiguration(void) {
     NSString *marketingName =
         device[@"name"] ?: identifier;
 
-    NSString *board =
-        device[@"boardconfig"];
+    id boardValue = device[@"boardconfig"];
+    NSString *board = nil;
 
-    if ([board isKindOfClass:NSArray.class]) {
-        board = [board firstObject];
+    if ([boardValue isKindOfClass:NSString.class]) {
+        board = boardValue;
+    } else if ([boardValue isKindOfClass:NSArray.class]) {
+        NSArray *boardArray = (NSArray *)boardValue;
+
+        if (boardArray.count > 0 &&
+            [boardArray[0] isKindOfClass:NSString.class]) {
+            board = boardArray[0];
+        }
     }
 
-    if (![board isKindOfClass:NSString.class]) {
-        board = nil;
+    if (![marketingName isKindOfClass:NSString.class]) {
+        marketingName = identifier;
     }
 
     return @{
@@ -397,8 +408,6 @@ static NSString *DIMDarwinRelease(void) {
 
     if (iosMajor >= 26) {
         darwinMajor = iosMajor - 1;
-    } else if (iosMajor >= 10) {
-        darwinMajor = iosMajor + 6;
     } else {
         darwinMajor = iosMajor + 6;
     }
@@ -465,7 +474,7 @@ static NSString *DIMOriginalKernelVersion(void) {
         return nil;
     }
 
-    char *buffer = calloc(1, size + 1);
+    char *buffer = (char *)calloc(1, size + 1);
 
     if (!buffer) return nil;
 
