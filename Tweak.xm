@@ -13,17 +13,27 @@
 
 static NSString * const DIMDomain = @"com.dim.manager";
 
+// MobileGestalt
 typedef CFPropertyListRef (*DIMMGCopyAnswerFunction)(
     CFStringRef, CFDictionaryRef
+);
+
+typedef CFPropertyListRef (*DIMMGCopyAnswerWithErrorFunction)(
+    CFStringRef, CFDictionaryRef, int *
 );
 
 typedef CFPropertyListRef (*DIMMGCopyMultipleAnswersFunction)(
     CFArrayRef, CFDictionaryRef
 );
 
-static DIMMGCopyAnswerFunction DIMOriginalMGCopyAnswer = NULL;
-static DIMMGCopyMultipleAnswersFunction DIMOriginalMGCopyMultipleAnswers = NULL;
+typedef CFStringRef (*DIMMGGetStringAnswerFunction)(CFStringRef);
 
+static DIMMGCopyAnswerFunction DIMOriginalMGCopyAnswer = NULL;
+static DIMMGCopyAnswerWithErrorFunction DIMOriginalMGCopyAnswerWithError = NULL;
+static DIMMGCopyMultipleAnswersFunction DIMOriginalMGCopyMultipleAnswers = NULL;
+static DIMMGGetStringAnswerFunction DIMOriginalMGGetStringAnswer = NULL;
+
+// System functions
 static int (*DIMOriginalSysctlByName)(
     const char *, void *, size_t *, void *, size_t
 ) = NULL;
@@ -57,7 +67,7 @@ static NSDictionary *DIMActiveConfiguration(void) {
     NSString *bundleID =
         NSBundle.mainBundle.bundleIdentifier ?: @"";
 
-    if (onlyIn) {
+    if (onlyIn && !global) {
         NSArray *selectedApps = [prefs arrayForKey:@"SelectedApps"];
 
         if (![selectedApps isKindOfClass:NSArray.class] ||
@@ -140,6 +150,18 @@ static CFStringRef DIMCreateCFString(NSString *value) {
     );
 }
 
+static CFPropertyListRef DIMReplacementForKey(CFStringRef key) {
+    NSString *configKey = DIMMGKey(key);
+
+    if (!configKey) return NULL;
+
+    NSString *replacement = DIMValue(configKey);
+
+    if (!replacement.length) return NULL;
+
+    return DIMCreateCFString(replacement);
+}
+
 
 // MARK: - MGCopyAnswer
 
@@ -147,22 +169,53 @@ static CFPropertyListRef DIMHookMGCopyAnswer(
     CFStringRef key,
     CFDictionaryRef options
 ) {
-    NSString *configKey = DIMMGKey(key);
+    CFPropertyListRef replacement = DIMReplacementForKey(key);
 
-    if (configKey) {
-        NSString *replacement = DIMValue(configKey);
-
-        if (replacement.length) {
-            CFStringRef result = DIMCreateCFString(replacement);
-
-            if (result) {
-                return result;
-            }
-        }
+    if (replacement) {
+        return replacement;
     }
 
     if (DIMOriginalMGCopyAnswer) {
         return DIMOriginalMGCopyAnswer(key, options);
+    }
+
+    return NULL;
+}
+
+
+// MARK: - MGCopyAnswerWithError
+
+static CFPropertyListRef DIMHookMGCopyAnswerWithError(
+    CFStringRef key,
+    CFDictionaryRef options,
+    int *error
+) {
+    CFPropertyListRef replacement = DIMReplacementForKey(key);
+
+    if (replacement) {
+        if (error) *error = 0;
+        return replacement;
+    }
+
+    if (DIMOriginalMGCopyAnswerWithError) {
+        return DIMOriginalMGCopyAnswerWithError(key, options, error);
+    }
+
+    return NULL;
+}
+
+
+// MARK: - MGGetStringAnswer
+
+static CFStringRef DIMHookMGGetStringAnswer(CFStringRef key) {
+    CFPropertyListRef replacement = DIMReplacementForKey(key);
+
+    if (replacement) {
+        return (CFStringRef)replacement;
+    }
+
+    if (DIMOriginalMGGetStringAnswer) {
+        return DIMOriginalMGGetStringAnswer(key);
     }
 
     return NULL;
@@ -214,25 +267,18 @@ static CFPropertyListRef DIMHookMGCopyMultipleAnswers(
             continue;
         }
 
-        NSString *configKey = DIMMGKey((CFStringRef)question);
+        CFPropertyListRef replacement =
+            DIMReplacementForKey((CFStringRef)question);
 
-        if (!configKey) continue;
-
-        NSString *replacement = DIMValue(configKey);
-
-        if (!replacement.length) continue;
-
-        CFStringRef replacementValue = DIMCreateCFString(replacement);
-
-        if (!replacementValue) continue;
+        if (!replacement) continue;
 
         CFDictionarySetValue(
             result,
             question,
-            replacementValue
+            replacement
         );
 
-        CFRelease(replacementValue);
+        CFRelease(replacement);
         changed = YES;
     }
 
@@ -259,17 +305,12 @@ static int DIMCopyStringToBuffer(
     size_t required = strlen(string) + 1;
 
     if (!oldp) {
-        if (oldlenp) {
-            *oldlenp = required;
-        }
+        if (oldlenp) *oldlenp = required;
         return 0;
     }
 
     if (!oldlenp || *oldlenp < required) {
-        if (oldlenp) {
-            *oldlenp = required;
-        }
-
+        if (oldlenp) *oldlenp = required;
         errno = ENOMEM;
         return -1;
     }
@@ -492,25 +533,43 @@ static NSOperatingSystemVersion DIMVersionFromString(
         );
 
         if (mgHandle) {
-            void *answerSymbol =
-                dlsym(mgHandle, "MGCopyAnswer");
+            void *symbol = dlsym(mgHandle, "MGCopyAnswer");
 
-            if (answerSymbol) {
+            if (symbol) {
                 MSHookFunction(
-                    answerSymbol,
+                    symbol,
                     (void *)DIMHookMGCopyAnswer,
                     (void **)&DIMOriginalMGCopyAnswer
                 );
             }
 
-            void *multipleSymbol =
-                dlsym(mgHandle, "MGCopyMultipleAnswers");
+            symbol = dlsym(mgHandle, "MGCopyAnswerWithError");
 
-            if (multipleSymbol) {
+            if (symbol) {
                 MSHookFunction(
-                    multipleSymbol,
+                    symbol,
+                    (void *)DIMHookMGCopyAnswerWithError,
+                    (void **)&DIMOriginalMGCopyAnswerWithError
+                );
+            }
+
+            symbol = dlsym(mgHandle, "MGCopyMultipleAnswers");
+
+            if (symbol) {
+                MSHookFunction(
+                    symbol,
                     (void *)DIMHookMGCopyMultipleAnswers,
                     (void **)&DIMOriginalMGCopyMultipleAnswers
+                );
+            }
+
+            symbol = dlsym(mgHandle, "MGGetStringAnswer");
+
+            if (symbol) {
+                MSHookFunction(
+                    symbol,
+                    (void *)DIMHookMGGetStringAnswer,
+                    (void **)&DIMOriginalMGGetStringAnswer
                 );
             }
         }
@@ -539,12 +598,14 @@ static NSOperatingSystemVersion DIMVersionFromString(
         NSDictionary *config = DIMActiveConfiguration();
 
         NSLog(@"[DIM] Runtime loaded: %@", bundleID);
-
         NSLog(@"[DIM] MGCopyAnswer: %@",
               DIMOriginalMGCopyAnswer ? @"installed" : @"unavailable");
-
+        NSLog(@"[DIM] MGCopyAnswerWithError: %@",
+              DIMOriginalMGCopyAnswerWithError ? @"installed" : @"unavailable");
         NSLog(@"[DIM] MGCopyMultipleAnswers: %@",
               DIMOriginalMGCopyMultipleAnswers ? @"installed" : @"unavailable");
+        NSLog(@"[DIM] MGGetStringAnswer: %@",
+              DIMOriginalMGGetStringAnswer ? @"installed" : @"unavailable");
 
         if (config) {
             NSLog(@"[DIM] Active for %@", bundleID);
