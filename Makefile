@@ -1,4 +1,5 @@
-ifeq ($(THEOS),)
+# Абсолютно надёжное определение THEOS для любых сред
+ifndef THEOS
 THEOS := $(shell pwd)/theos
 endif
 
@@ -20,6 +21,5 @@ DeviceIdentityManager_FRAMEWORKS = UIKit CoreLocation CoreGraphics SystemConfigu
 
 include $(THEOS_MAKEFILE_PATH)/tweak.mk
 
-# Обращаемся напрямую к $(THEOS) для подключения сабпроекта
 SUBPROJECTS += Preferences
 include $(THEOS)/makefiles/aggregate.mk
