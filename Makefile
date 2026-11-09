@@ -1,8 +1,7 @@
-
 THEOS_PACKAGE_SCHEME = rootless
 
 ARCHS = arm64
-TARGET = iphone:clang:latest:15.0
+TARGET = iphone:clang:16.5:15.0
 
 INSTALL_TARGET_PROCESSES = SpringBoard
 
@@ -21,6 +20,7 @@ BUNDLE_NAME = DIMPreferences
 DIMPreferences_FILES = DIMRootListController.m
 DIMPreferences_CFLAGS = -fobjc-arc
 DIMPreferences_FRAMEWORKS = UIKit
+DIMPreferences_PRIVATE_FRAMEWORKS = Preferences
 DIMPreferences_INSTALL_PATH = /Library/PreferenceBundles
 DIMPreferences_RESOURCE_FILES = Root.plist
 
