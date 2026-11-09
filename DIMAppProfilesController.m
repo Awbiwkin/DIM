@@ -1,13 +1,11 @@
 
 #import <UIKit/UIKit.h>
-#import <Preferences/PSListController.h>
-#import <Preferences/PSSpecifier.h>
 #import <objc/message.h>
 
 static NSString * const DIMDomain = @"com.dim.manager";
 static NSString * const DIMProfilesKey = @"AppProfiles";
 
-@interface DIMAppProfilesController : PSListController <UISearchBarDelegate>
+@interface DIMAppProfilesController : UITableViewController <UISearchBarDelegate>
 
 @property (nonatomic, strong) NSArray<NSDictionary *> *apps;
 @property (nonatomic, strong) NSArray<NSDictionary *> *filteredApps;
@@ -16,13 +14,6 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
 @end
 
 @implementation DIMAppProfilesController
-
-- (NSArray *)specifiers {
-    if (!_specifiers) {
-        _specifiers = [NSMutableArray array];
-    }
-    return _specifiers;
-}
 
 - (NSUserDefaults *)prefs {
     return [[NSUserDefaults alloc] initWithSuiteName:DIMDomain];
@@ -52,7 +43,8 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
         return @[];
     }
 
-    SEL defaultSelector = NSSelectorFromString(@"defaultWorkspace");
+    SEL defaultSelector =
+        NSSelectorFromString(@"defaultWorkspace");
 
     if (![workspaceClass respondsToSelector:defaultSelector]) {
         return @[];
@@ -132,7 +124,8 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
         NSDictionary *a,
         NSDictionary *b
     ) {
-        return [a[@"name"] localizedStandardCompare:b[@"name"]];
+        return [a[@"name"]
+            localizedStandardCompare:b[@"name"]];
     }];
 
     return result;
@@ -142,6 +135,7 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
     [super viewDidLoad];
 
     self.title = @"App Profiles";
+
     self.view.backgroundColor =
         UIColor.systemGroupedBackgroundColor;
 
@@ -159,7 +153,12 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
     self.searchBar.autocapitalizationType =
         UITextAutocapitalizationTypeNone;
 
+    [self.searchBar sizeToFit];
+
     self.tableView.tableHeaderView = self.searchBar;
+
+    self.apps = @[];
+    self.filteredApps = @[];
 
     [self reloadApps];
 }
@@ -208,6 +207,7 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
 
 - (NSInteger)tableView:(UITableView *)tableView
  numberOfRowsInSection:(NSInteger)section {
+
     return self.filteredApps.count;
 }
 
@@ -239,6 +239,7 @@ static NSString * const DIMProfilesKey = @"AppProfiles";
     NSString *mode = [self modeForBundle:bundleID];
 
     cell.textLabel.text = app[@"name"];
+
     cell.detailTextLabel.text =
         [NSString stringWithFormat:@"%@ · %@",
             mode,
@@ -324,7 +325,8 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
             style:UIAlertActionStyleCancel
             handler:nil]];
 
-    alert.popoverPresentationController.sourceView = self.tableView;
+    alert.popoverPresentationController.sourceView =
+        self.tableView;
 
     alert.popoverPresentationController.sourceRect =
         [tableView rectForRowAtIndexPath:indexPath];
