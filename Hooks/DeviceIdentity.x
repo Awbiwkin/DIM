@@ -28,7 +28,6 @@ extern CFTypeRef MGCopyAnswer(CFStringRef property);
 // Hook UIDevice
 %hook UIDevice
 - (NSString *)model {
-    NSString *bundleID = [[NSBundle mainBundle] bundleIdentifier];
     if ([[DIMManager sharedManager] globalEnabled]) {
         return @"iPhone";
     }
