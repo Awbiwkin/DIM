@@ -1,7 +1,12 @@
-TARGET := iphone:clang:latest:15.0
-THEOS_PACKAGE_SCHEME = rootless
+# Гарантированно определяем путь к THEOS до любых инклюдов
+ifeq ($(THEOS),)
+THEOS := $(shell pwd)/theos
+endif
 
 include $(THEOS)/makefiles/common.mk
+
+TARGET := iphone:clang:latest:15.0
+THEOS_PACKAGE_SCHEME = rootless
 
 TWEAK_NAME = DeviceIdentityManager
 
