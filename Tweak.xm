@@ -1,7 +1,6 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
-#import <CoreFoundation/CoreFoundation.h>
 #import <objc/runtime.h>
 #import <substrate.h>
 
@@ -11,25 +10,16 @@
 #import <errno.h>
 #import <string.h>
 
+static NSString *DIM_PROFILE_MODEL = nil;
+static NSString *DIM_PROFILE_ID = nil;
+static NSString *DIM_PROFILE_BOARD = nil;
+static NSString *DIM_PROFILE_IOS = nil;
+static NSString *DIM_PROFILE_BUILD = nil;
+static NSString *DIM_PROFILE_DARWIN = nil;
+
 #ifndef KERN_OSVERSION
 #define KERN_OSVERSION 65
 #endif
-
-static NSString *DIMModel = nil;
-static NSString *DIMIdentifier = nil;
-static NSString *DIMBoardConfig = nil;
-
-static NSString *DIMIOSVersion = nil;
-static NSString *DIMBuild = nil;
-static NSString *DIMDarwin = nil;
-static NSString *DIMKernelVersion = nil;
-
-static BOOL DIMConfigEnabled = NO;
-static BOOL DIMIOSEnabled = NO;
-static BOOL DIMInitialized = NO;
-
-static NSString * const DIMDomain = @"com.dim.manager";
-static NSString * const DIMProfileKey = @"ActiveProfile";
 
 typedef int (*DIMSysctlByNameFn)(
     const char *, void *, size_t *, void *, size_t
@@ -45,91 +35,57 @@ static DIMSysctlByNameFn DIMOriginalSysctlByName = NULL;
 static DIMSysctlFn DIMOriginalSysctl = NULL;
 static DIMUnameFn DIMOriginalUname = NULL;
 
+static NSString *DIMKernelVersion = nil;
+static BOOL DIMInitialized = NO;
+
 
 // ------------------------------------------------------------
-// PROFILE READING
+// LOAD PROFILE
 // ------------------------------------------------------------
 
-static NSString *DIMStringValue(id value) {
-    if (![value isKindOfClass:[NSString class]]) return nil;
+static BOOL DIMLoadProfile(void) {
+    NSUserDefaults *prefs =
+        [[NSUserDefaults alloc] initWithSuiteName:@"com.dim.manager"];
 
-    NSString *string = (NSString *)value;
+    [prefs synchronize];
 
-    if (string.length == 0) return nil;
+    NSDictionary *profile = [prefs dictionaryForKey:@"ActiveProfile"];
 
-    return string;
-}
+    if (![profile isKindOfClass:NSDictionary.class]) return NO;
 
-static NSDictionary *DIMReadActiveProfile(void) {
-    CFPreferencesAppSynchronize((__bridge CFStringRef)DIMDomain);
+    if (![profile[@"config_applied"] boolValue]) return NO;
+    if (![profile[@"ios_applied"] boolValue]) return NO;
 
-    CFPropertyListRef stored =
-        CFPreferencesCopyAppValue(
-            (__bridge CFStringRef)DIMProfileKey,
-            (__bridge CFStringRef)DIMDomain
-        );
+    id model = profile[@"name"];
+    id identifier = profile[@"identifier"];
+    id board = profile[@"boardconfig"];
+    id version = profile[@"version"];
+    id build = profile[@"build"];
+    id darwin = profile[@"darwin"];
 
-    NSDictionary *profile = nil;
-
-    if (stored) {
-        id object = CFBridgingRelease(stored);
-
-        if ([object isKindOfClass:[NSDictionary class]]) {
-            profile = object;
-        }
+    if (![model isKindOfClass:NSString.class] ||
+        ![identifier isKindOfClass:NSString.class] ||
+        ![board isKindOfClass:NSString.class] ||
+        ![version isKindOfClass:NSString.class] ||
+        ![build isKindOfClass:NSString.class] ||
+        ![darwin isKindOfClass:NSString.class]) {
+        return NO;
     }
 
-    if (!profile) {
-        NSUserDefaults *defaults =
-            [[NSUserDefaults alloc] initWithSuiteName:DIMDomain];
-
-        [defaults synchronize];
-
-        id object = [defaults objectForKey:DIMProfileKey];
-
-        if ([object isKindOfClass:[NSDictionary class]]) {
-            profile = object;
-        }
+    if (![model length] || ![identifier length] ||
+        ![board length] || ![version length] ||
+        ![build length] || ![darwin length]) {
+        return NO;
     }
 
-    return profile;
-}
+    DIM_PROFILE_MODEL = [model copy];
+    DIM_PROFILE_ID = [identifier copy];
+    DIM_PROFILE_BOARD = [board copy];
+    DIM_PROFILE_IOS = [version copy];
+    DIM_PROFILE_BUILD = [build copy];
+    DIM_PROFILE_DARWIN = [darwin copy];
 
-static void DIMLoadProfile(void) {
-    NSDictionary *profile = DIMReadActiveProfile();
-
-    if (![profile isKindOfClass:[NSDictionary class]]) return;
-
-    BOOL configApplied = [profile[@"config_applied"] boolValue];
-    BOOL iosApplied = [profile[@"ios_applied"] boolValue];
-
-    if (configApplied) {
-        NSString *model = DIMStringValue(profile[@"name"]);
-        NSString *identifier = DIMStringValue(profile[@"identifier"]);
-        NSString *board = DIMStringValue(profile[@"boardconfig"]);
-
-        if (model && identifier && board) {
-            DIMModel = [model copy];
-            DIMIdentifier = [identifier copy];
-            DIMBoardConfig = [board copy];
-
-            DIMConfigEnabled = YES;
-        }
-    }
-
-    if (iosApplied) {
-        NSString *version = DIMStringValue(profile[@"version"]);
-        NSString *build = DIMStringValue(profile[@"build"]);
-        NSString *darwin = DIMStringValue(profile[@"darwin"]);
-
-        if (version && build && darwin) {
-            DIMIOSVersion = [version copy];
-            DIMBuild = [build copy];
-            DIMDarwin = [darwin copy];
-
-            DIMIOSEnabled = YES;
-        }
-    }
+    return YES;
 }
 
 
@@ -172,8 +128,6 @@ static int DIMWriteString(
 // ------------------------------------------------------------
 
 static void DIMPrepareKernelVersion(void) {
-    if (!DIMIOSEnabled || !DIMDarwin.length) return;
-
     struct utsname info;
     memset(&info, 0, sizeof(info));
 
@@ -190,7 +144,7 @@ static void DIMPrepareKernelVersion(void) {
     if (release.length) {
         DIMKernelVersion =
             [original stringByReplacingOccurrencesOfString:release
-                                                 withString:DIMDarwin];
+                                                 withString:DIM_PROFILE_DARWIN];
     } else {
         DIMKernelVersion = original;
     }
@@ -204,24 +158,20 @@ static void DIMPrepareKernelVersion(void) {
 static const char *DIMReplacementForName(const char *name) {
     if (!name) return NULL;
 
-    if (DIMConfigEnabled) {
-        if (strcmp(name, "hw.machine") == 0)
-            return DIMIdentifier.UTF8String;
+    if (strcmp(name, "hw.machine") == 0)
+        return DIM_PROFILE_ID.UTF8String;
 
-        if (strcmp(name, "hw.model") == 0)
-            return DIMBoardConfig.UTF8String;
-    }
+    if (strcmp(name, "hw.model") == 0)
+        return DIM_PROFILE_BOARD.UTF8String;
 
-    if (DIMIOSEnabled) {
-        if (strcmp(name, "kern.osrelease") == 0)
-            return DIMDarwin.UTF8String;
+    if (strcmp(name, "kern.osrelease") == 0)
+        return DIM_PROFILE_DARWIN.UTF8String;
 
-        if (strcmp(name, "kern.osversion") == 0)
-            return DIMBuild.UTF8String;
+    if (strcmp(name, "kern.osversion") == 0)
+        return DIM_PROFILE_BUILD.UTF8String;
 
-        if (strcmp(name, "kern.version") == 0)
-            return DIMKernelVersion.UTF8String;
-    }
+    if (strcmp(name, "kern.version") == 0)
+        return DIMKernelVersion.UTF8String;
 
     return NULL;
 }
@@ -257,20 +207,20 @@ static int DIMHookSysctlByName(
 static const char *DIMReplacementForMIB(int *name, u_int length) {
     if (!name || length != 2) return NULL;
 
-    if (DIMConfigEnabled && name[0] == CTL_HW) {
+    if (name[0] == CTL_HW) {
         if (name[1] == HW_MACHINE)
-            return DIMIdentifier.UTF8String;
+            return DIM_PROFILE_ID.UTF8String;
 
         if (name[1] == HW_MODEL)
-            return DIMBoardConfig.UTF8String;
+            return DIM_PROFILE_BOARD.UTF8String;
     }
 
-    if (DIMIOSEnabled && name[0] == CTL_KERN) {
+    if (name[0] == CTL_KERN) {
         if (name[1] == KERN_OSRELEASE)
-            return DIMDarwin.UTF8String;
+            return DIM_PROFILE_DARWIN.UTF8String;
 
         if (name[1] == KERN_OSVERSION)
-            return DIMBuild.UTF8String;
+            return DIM_PROFILE_BUILD.UTF8String;
 
         if (name[1] == KERN_VERSION)
             return DIMKernelVersion.UTF8String;
@@ -320,28 +270,15 @@ static int DIMHookUname(struct utsname *info) {
     if (result != 0 || !info)
         return result;
 
-    if (DIMConfigEnabled) {
-        strlcpy(
-            info->machine,
-            DIMIdentifier.UTF8String,
-            sizeof(info->machine)
-        );
-    }
+    strlcpy(info->machine, DIM_PROFILE_ID.UTF8String, sizeof(info->machine));
+    strlcpy(info->release, DIM_PROFILE_DARWIN.UTF8String, sizeof(info->release));
 
-    if (DIMIOSEnabled) {
+    if (DIMKernelVersion.length) {
         strlcpy(
-            info->release,
-            DIMDarwin.UTF8String,
-            sizeof(info->release)
+            info->version,
+            DIMKernelVersion.UTF8String,
+            sizeof(info->version)
         );
-
-        if (DIMKernelVersion.length) {
-            strlcpy(
-                info->version,
-                DIMKernelVersion.UTF8String,
-                sizeof(info->version)
-            );
-        }
     }
 
     return 0;
@@ -353,15 +290,15 @@ static int DIMHookUname(struct utsname *info) {
 // ------------------------------------------------------------
 
 static NSString *DIMDeviceModel(id self, SEL selector) {
-    return DIMModel;
+    return DIM_PROFILE_MODEL;
 }
 
 static NSString *DIMDeviceLocalizedModel(id self, SEL selector) {
-    return DIMModel;
+    return DIM_PROFILE_MODEL;
 }
 
 static NSString *DIMDeviceSystemVersion(id self, SEL selector) {
-    return DIMIOSVersion;
+    return DIM_PROFILE_IOS;
 }
 
 static void DIMReplaceInstanceMethod(
@@ -388,27 +325,23 @@ static void DIMReplaceInstanceMethod(
 static void DIMInstallUIDeviceHooks(void) {
     Class cls = [UIDevice class];
 
-    if (DIMConfigEnabled) {
-        DIMReplaceInstanceMethod(
-            cls,
-            @selector(model),
-            (IMP)DIMDeviceModel
-        );
+    DIMReplaceInstanceMethod(
+        cls,
+        @selector(model),
+        (IMP)DIMDeviceModel
+    );
 
-        DIMReplaceInstanceMethod(
-            cls,
-            @selector(localizedModel),
-            (IMP)DIMDeviceLocalizedModel
-        );
-    }
+    DIMReplaceInstanceMethod(
+        cls,
+        @selector(localizedModel),
+        (IMP)DIMDeviceLocalizedModel
+    );
 
-    if (DIMIOSEnabled) {
-        DIMReplaceInstanceMethod(
-            cls,
-            @selector(systemVersion),
-            (IMP)DIMDeviceSystemVersion
-        );
-    }
+    DIMReplaceInstanceMethod(
+        cls,
+        @selector(systemVersion),
+        (IMP)DIMDeviceSystemVersion
+    );
 }
 
 
@@ -459,9 +392,7 @@ static void DIMInitialize(void) {
         if (![bundleID isEqualToString:@"ph.telegra.Telegraph"])
             return;
 
-        DIMLoadProfile();
-
-        if (!DIMConfigEnabled && !DIMIOSEnabled)
+        if (!DIMLoadProfile())
             return;
 
         DIMInstallHooks();
