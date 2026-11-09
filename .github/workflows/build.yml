@@ -29,9 +29,10 @@ jobs:
 
       - name: Setup iOS SDK
         run: |
-          if [ ! -d "$THEOS/sdks" ]; then
-            git clone https://github.com/theos/sdks.git $THEOS/sdks
-          fi
+          mkdir -p $THEOS/sdks
+          git clone --depth=1 https://github.com/theos/sdks.git $THEOS/sdks_repo
+          cp -r $THEOS/sdks_repo/*.sdk $THEOS/sdks/
+          rm -rf $THEOS/sdks_repo
 
       - name: Build Package
         run: |
