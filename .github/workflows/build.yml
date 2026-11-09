@@ -28,6 +28,12 @@ jobs:
           echo "THEOS=$THEOS" >> "$GITHUB_ENV"
           echo "$THEOS/bin" >> "$GITHUB_PATH"
 
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          brew install ldid
+
       - name: Build DIM
         shell: bash
         run: |
