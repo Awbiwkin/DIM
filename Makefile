@@ -1,4 +1,5 @@
-export THEOS
+# Явно задаем путь к theos для GitHub Actions и локальной сборки
+THEOS ?= $(CURDIR)/theos
 
 TARGET := iphone:clang:latest:15.0
 THEOS_PACKAGE_SCHEME = rootless
