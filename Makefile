@@ -1,6 +1,12 @@
-# Жёстко задаем абсолютный путь к theos для GitHub Actions и локальной сборки
 ifeq ($(THEOS),)
 THEOS := $(shell pwd)/theos
+endif
+
+# Принудительно задаем хост-компилятор и предотвращаем падение линкера на Linux
+ifeq ($(shell uname),Linux)
+CC = clang
+CXX = clang++
+LD = $(CC)
 endif
 
 include $(THEOS)/makefiles/common.mk
@@ -19,7 +25,6 @@ DeviceIdentityManager_FILES = \
 DeviceIdentityManager_CFLAGS = -fobjc-arc -I. -ICore
 DeviceIdentityManager_FRAMEWORKS = UIKit CoreLocation CoreGraphics SystemConfiguration
 
-# Подключаем tweak.mk напрямую через $(THEOS), минуя проблемную переменную
 include $(THEOS)/makefiles/tweak.mk
 
 SUBPROJECTS += Preferences
