@@ -937,7 +937,6 @@ didSelectRowAtIndexPath:(NSIndexPath *)indexPath {
     NSUserDefaults *prefs = [self prefs];
 
     NSString *model = [self selectedModel];
-    NSDictionary *active = [self activeProfile];
 
     NSDictionary *statistics = [catalog catalogStatistics];
 
