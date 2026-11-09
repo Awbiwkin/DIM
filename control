@@ -1,0 +1,11 @@
+
+Package: com.dim.manager
+Name: Device Identity Manager
+Version: 0.3.1
+Architecture: iphoneos-arm64
+Description: Device identity and environment manager with online catalog.
+Maintainer: DIM Developer
+Author: DIM Developer
+Section: Tweaks
+Priority: optional
+Depends: preferenceloader
