@@ -81,11 +81,11 @@
 
         <dict>
             <key>cell</key>
-            <string>PSLinkCell</string>
+            <string>PSButtonCell</string>
             <key>label</key>
             <string>Manage App Profiles</string>
-            <key>detail</key>
-            <string>DIMAppProfilesController</string>
+            <key>action</key>
+            <string>openAppProfiles</string>
         </dict>
 
         <dict>
