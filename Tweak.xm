@@ -21,14 +21,8 @@ static NSString *DIM_PROFILE_DARWIN = nil;
 #define KERN_OSVERSION 65
 #endif
 
-typedef int (*DIMSysctlByNameFn)(
-    const char *, void *, size_t *, void *, size_t
-);
-
-typedef int (*DIMSysctlFn)(
-    int *, u_int, void *, size_t *, void *, size_t
-);
-
+typedef int (*DIMSysctlByNameFn)(const char *, void *, size_t *, void *, size_t);
+typedef int (*DIMSysctlFn)(int *, u_int, void *, size_t *, void *, size_t);
 typedef int (*DIMUnameFn)(struct utsname *);
 
 static DIMSysctlByNameFn DIMOriginalSysctlByName = NULL;
@@ -40,21 +34,29 @@ static BOOL DIMInitialized = NO;
 
 
 // ------------------------------------------------------------
-// LOAD PROFILE
+// LOAD PROFILE DIRECTLY FROM PREFERENCES PLIST
 // ------------------------------------------------------------
 
 static BOOL DIMLoadProfile(void) {
-    NSUserDefaults *prefs =
-        [[NSUserDefaults alloc] initWithSuiteName:@"com.dim.manager"];
+    NSString *path =
+        @"/var/mobile/Library/Preferences/com.dim.manager.plist";
 
-    [prefs synchronize];
+    NSDictionary *root =
+        [NSDictionary dictionaryWithContentsOfFile:path];
 
-    NSDictionary *profile = [prefs dictionaryForKey:@"ActiveProfile"];
+    if (![root isKindOfClass:[NSDictionary class]])
+        return NO;
 
-    if (![profile isKindOfClass:NSDictionary.class]) return NO;
+    NSDictionary *profile = root[@"ActiveProfile"];
 
-    if (![profile[@"config_applied"] boolValue]) return NO;
-    if (![profile[@"ios_applied"] boolValue]) return NO;
+    if (![profile isKindOfClass:[NSDictionary class]])
+        return NO;
+
+    if (![profile[@"config_applied"] boolValue])
+        return NO;
+
+    if (![profile[@"ios_applied"] boolValue])
+        return NO;
 
     id model = profile[@"name"];
     id identifier = profile[@"identifier"];
@@ -63,18 +65,18 @@ static BOOL DIMLoadProfile(void) {
     id build = profile[@"build"];
     id darwin = profile[@"darwin"];
 
-    if (![model isKindOfClass:NSString.class] ||
-        ![identifier isKindOfClass:NSString.class] ||
-        ![board isKindOfClass:NSString.class] ||
-        ![version isKindOfClass:NSString.class] ||
-        ![build isKindOfClass:NSString.class] ||
-        ![darwin isKindOfClass:NSString.class]) {
+    if (![model isKindOfClass:[NSString class]] ||
+        ![identifier isKindOfClass:[NSString class]] ||
+        ![board isKindOfClass:[NSString class]] ||
+        ![version isKindOfClass:[NSString class]] ||
+        ![build isKindOfClass:[NSString class]] ||
+        ![darwin isKindOfClass:[NSString class]]) {
         return NO;
     }
 
-    if (![model length] || ![identifier length] ||
-        ![board length] || ![version length] ||
-        ![build length] || ![darwin length]) {
+    if (!model.length || !identifier.length ||
+        !board.length || !version.length ||
+        !build.length || !darwin.length) {
         return NO;
     }
 
@@ -131,7 +133,8 @@ static void DIMPrepareKernelVersion(void) {
     struct utsname info;
     memset(&info, 0, sizeof(info));
 
-    if (uname(&info) != 0) return;
+    if (uname(&info) != 0)
+        return;
 
     NSString *original =
         [NSString stringWithUTF8String:info.version];
@@ -139,7 +142,8 @@ static void DIMPrepareKernelVersion(void) {
     NSString *release =
         [NSString stringWithUTF8String:info.release];
 
-    if (!original.length) return;
+    if (!original.length)
+        return;
 
     if (release.length) {
         DIMKernelVersion =
@@ -156,7 +160,8 @@ static void DIMPrepareKernelVersion(void) {
 // ------------------------------------------------------------
 
 static const char *DIMReplacementForName(const char *name) {
-    if (!name) return NULL;
+    if (!name)
+        return NULL;
 
     if (strcmp(name, "hw.machine") == 0)
         return DIM_PROFILE_ID.UTF8String;
@@ -205,7 +210,8 @@ static int DIMHookSysctlByName(
 // ------------------------------------------------------------
 
 static const char *DIMReplacementForMIB(int *name, u_int length) {
-    if (!name || length != 2) return NULL;
+    if (!name || length != 2)
+        return NULL;
 
     if (name[0] == CTL_HW) {
         if (name[1] == HW_MACHINE)
@@ -309,7 +315,7 @@ static void DIMReplaceInstanceMethod(
     if (!cls || !selector || !replacement)
         return;
 
-    auto method = class_getInstanceMethod(cls, selector);
+    Method method = class_getInstanceMethod(cls, selector);
 
     if (!method)
         return;
