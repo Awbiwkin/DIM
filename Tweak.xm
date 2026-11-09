@@ -25,6 +25,35 @@ static NSDictionary *DIMConfiguration = nil;
 static NSString *DIMOriginalSystemVersion = nil;
 
 // ============================================================
+// DIAGNOSTICS
+// ============================================================
+
+static volatile uint64_t DIMImagesProcessed = 0;
+static volatile uint64_t DIMImagesWithLinkedit = 0;
+static volatile uint64_t DIMImagesWithSymbols = 0;
+static volatile uint64_t DIMPointerSectionsFound = 0;
+
+static volatile uint64_t DIMSysctlByNameReplaced = 0;
+static volatile uint64_t DIMSysctlReplaced = 0;
+static volatile uint64_t DIMSysctlNameToMIBReplaced = 0;
+static volatile uint64_t DIMUnameReplaced = 0;
+
+static volatile uint64_t DIMProtectionFailures = 0;
+static volatile uint64_t DIMInvalidLinkeditRanges = 0;
+
+static void DIMRecordReplacement(const char *name) {
+    if (strcmp(name, "sysctlbyname") == 0) {
+        __sync_fetch_and_add(&DIMSysctlByNameReplaced, 1);
+    } else if (strcmp(name, "sysctl") == 0) {
+        __sync_fetch_and_add(&DIMSysctlReplaced, 1);
+    } else if (strcmp(name, "sysctlnametomib") == 0) {
+        __sync_fetch_and_add(&DIMSysctlNameToMIBReplaced, 1);
+    } else if (strcmp(name, "uname") == 0) {
+        __sync_fetch_and_add(&DIMUnameReplaced, 1);
+    }
+}
+
+// ============================================================
 // ORIGINAL FUNCTIONS
 // ============================================================
 
@@ -182,12 +211,62 @@ struct DIMRebindingsEntry {
 
 static struct DIMRebindingsEntry *DIMRebindingsHead = NULL;
 
-static BOOL DIMRangeValid(
-    size_t offset,
-    size_t length,
-    size_t total
+// Checks a file offset against the actual __LINKEDIT file range.
+// Mach-O symoff/stroff/indirectsymoff are absolute file offsets.
+static BOOL DIMLinkeditRangeValid(
+    uint64_t offset,
+    uint64_t length,
+    uint64_t fileoff,
+    uint64_t filesize
 ) {
-    return offset <= total && length <= total - offset;
+    if (offset < fileoff) {
+        return NO;
+    }
+
+    uint64_t relativeOffset = offset - fileoff;
+
+    if (relativeOffset > filesize) {
+        return NO;
+    }
+
+    if (length > filesize - relativeOffset) {
+        return NO;
+    }
+
+    return YES;
+}
+
+static BOOL DIMCommandRangeValid(
+    const struct mach_header_64 *header,
+    const struct load_command *command
+) {
+    if (!header || !command) {
+        return NO;
+    }
+
+    uintptr_t commandsStart =
+        (uintptr_t)header + sizeof(struct mach_header_64);
+
+    uintptr_t commandsEnd =
+        commandsStart + header->sizeofcmds;
+
+    uintptr_t commandAddress = (uintptr_t)command;
+
+    if (commandsEnd < commandsStart ||
+        commandAddress < commandsStart ||
+        commandAddress > commandsEnd) {
+        return NO;
+    }
+
+    if (command->cmdsize < sizeof(struct load_command)) {
+        return NO;
+    }
+
+    if (command->cmdsize > commandsEnd - commandAddress) {
+        return NO;
+    }
+
+    return YES;
 }
 
 static BOOL DIMProtectAddress(void *address) {
@@ -195,7 +274,8 @@ static BOOL DIMProtectAddress(void *address) {
         return NO;
     }
 
-    vm_address_t location = (vm_address_t)(uintptr_t)address;
+    vm_address_t location =
+        (vm_address_t)(uintptr_t)address;
 
     vm_address_t page =
         location & ~((vm_address_t)vm_page_size - 1);
@@ -229,36 +309,43 @@ static void DIMPerformRebinding(
         return;
     }
 
+    __sync_fetch_and_add(&DIMImagesWithLinkedit, 1);
+
+    uint64_t symbolTableLength =
+        (uint64_t)symtab->nsyms * sizeof(struct nlist_64);
+
+    uint64_t indirectTableLength =
+        (uint64_t)dysymtab->nindirectsyms * sizeof(uint32_t);
+
+    if (!DIMLinkeditRangeValid(
+        symtab->symoff,
+        symbolTableLength,
+        linkedit->fileoff,
+        linkedit->filesize
+    ) ||
+        !DIMLinkeditRangeValid(
+            symtab->stroff,
+            symtab->strsize,
+            linkedit->fileoff,
+            linkedit->filesize
+        ) ||
+        !DIMLinkeditRangeValid(
+            dysymtab->indirectsymoff,
+            indirectTableLength,
+            linkedit->fileoff,
+            linkedit->filesize
+        )) {
+
+        __sync_fetch_and_add(&DIMInvalidLinkeditRanges, 1);
+        return;
+    }
+
     uintptr_t linkeditBase =
         (uintptr_t)slide +
         (uintptr_t)linkedit->vmaddr -
         (uintptr_t)linkedit->fileoff;
 
     if (!linkeditBase) {
-        return;
-    }
-
-    if (!DIMRangeValid(
-        symtab->symoff,
-        (size_t)symtab->nsyms * sizeof(struct nlist_64),
-        (size_t)linkedit->filesize
-    )) {
-        return;
-    }
-
-    if (!DIMRangeValid(
-        symtab->stroff,
-        symtab->strsize,
-        (size_t)linkedit->filesize
-    )) {
-        return;
-    }
-
-    if (!DIMRangeValid(
-        dysymtab->indirectsymoff,
-        (size_t)dysymtab->nindirectsyms * sizeof(uint32_t),
-        (size_t)linkedit->filesize
-    )) {
         return;
     }
 
@@ -271,13 +358,15 @@ static void DIMPerformRebinding(
     uint32_t *indirect =
         (uint32_t *)(linkeditBase + dysymtab->indirectsymoff);
 
+    __sync_fetch_and_add(&DIMImagesWithSymbols, 1);
+
     struct load_command *command =
         (struct load_command *)(
             (uintptr_t)header + sizeof(struct mach_header_64)
         );
 
     for (uint32_t i = 0; i < header->ncmds; i++) {
-        if (command->cmdsize < sizeof(struct load_command)) {
+        if (!DIMCommandRangeValid(header, command)) {
             return;
         }
 
@@ -290,11 +379,8 @@ static void DIMPerformRebinding(
             size_t sectionsSize =
                 (size_t)segment->nsects * sizeof(struct section_64);
 
-            if (!DIMRangeValid(
-                sizeof(struct segment_command_64),
-                sectionsSize,
-                command->cmdsize
-            )) {
+            if (sectionsSize >
+                command->cmdsize - sizeof(struct segment_command_64)) {
                 command = (struct load_command *)(
                     (uintptr_t)command + command->cmdsize
                 );
@@ -320,6 +406,8 @@ static void DIMPerformRebinding(
                     sections[j].size % sizeof(uintptr_t) != 0) {
                     continue;
                 }
+
+                __sync_fetch_and_add(&DIMPointerSectionsFound, 1);
 
                 uintptr_t *bindings =
                     (uintptr_t *)(slide + sections[j].addr);
@@ -403,11 +491,17 @@ static void DIMPerformRebinding(
                             }
 
                             if (!DIMProtectAddress(&bindings[k])) {
+                                __sync_fetch_and_add(
+                                    &DIMProtectionFailures,
+                                    1
+                                );
                                 continue;
                             }
 
                             bindings[k] =
                                 (uintptr_t)binding->replacement;
+
+                            DIMRecordReplacement(binding->name);
                         }
                     }
                 }
@@ -428,6 +522,8 @@ static void DIMRebindImage(
         return;
     }
 
+    __sync_fetch_and_add(&DIMImagesProcessed, 1);
+
     struct mach_header_64 *header64 =
         (struct mach_header_64 *)header;
 
@@ -441,7 +537,7 @@ static void DIMRebindImage(
         );
 
     for (uint32_t i = 0; i < header64->ncmds; i++) {
-        if (command->cmdsize < sizeof(struct load_command)) {
+        if (!DIMCommandRangeValid(header64, command)) {
             return;
         }
 
@@ -1029,7 +1125,6 @@ static void DIMInstallUIDeviceHooks(void) {
         NSString *bundleID =
             NSBundle.mainBundle.bundleIdentifier ?: @"unknown";
 
-        // Load configuration before installing any hooks.
         DIMConfiguration = DIMLoadConfiguration();
 
         if (!DIMConfiguration) {
@@ -1037,7 +1132,6 @@ static void DIMInstallUIDeviceHooks(void) {
             return;
         }
 
-        // Capture original version before UIDevice swizzling.
         DIMOriginalSystemVersion =
             [[UIDevice currentDevice] systemVersion];
 
@@ -1073,12 +1167,47 @@ static void DIMInstallUIDeviceHooks(void) {
 
         NSLog(@"[DIM] Runtime loaded: %@", bundleID);
         NSLog(@"[DIM] Fishhook result: %d", result);
-        NSLog(@"[DIM] Identity active: %@", bundleID);
+
+        NSLog(@"[DIM] Images processed: %llu",
+            (unsigned long long)DIMImagesProcessed);
+
+        NSLog(@"[DIM] Images with LINKEDIT: %llu",
+            (unsigned long long)DIMImagesWithLinkedit);
+
+        NSLog(@"[DIM] Images with symbols: %llu",
+            (unsigned long long)DIMImagesWithSymbols);
+
+        NSLog(@"[DIM] Pointer sections: %llu",
+            (unsigned long long)DIMPointerSectionsFound);
+
+        NSLog(@"[DIM] Replaced sysctlbyname: %llu",
+            (unsigned long long)DIMSysctlByNameReplaced);
+
+        NSLog(@"[DIM] Replaced sysctl: %llu",
+            (unsigned long long)DIMSysctlReplaced);
+
+        NSLog(@"[DIM] Replaced sysctlnametomib: %llu",
+            (unsigned long long)DIMSysctlNameToMIBReplaced);
+
+        NSLog(@"[DIM] Replaced uname: %llu",
+            (unsigned long long)DIMUnameReplaced);
+
+        NSLog(@"[DIM] Protection failures: %llu",
+            (unsigned long long)DIMProtectionFailures);
+
+        NSLog(@"[DIM] Invalid LINKEDIT ranges: %llu",
+            (unsigned long long)DIMInvalidLinkeditRanges);
+
         NSLog(@"[DIM] Identifier: %@", DIMValue(@"identifier"));
         NSLog(@"[DIM] Product: %@", DIMValue(@"name"));
         NSLog(@"[DIM] Internal name: %@", DIMValue(@"board"));
         NSLog(@"[DIM] iOS: %@", DIMValue(@"version"));
         NSLog(@"[DIM] Build: %@", DIMValue(@"build"));
         NSLog(@"[DIM] Original iOS: %@", DIMOriginalSystemVersion);
+
+        NSLog(@"[DIM] Original pointers: sysctlbyname=%p sysctl=%p uname=%p",
+            DIMOriginalSysctlByName,
+            DIMOriginalSysctl,
+            DIMOriginalUname);
     }
 }
