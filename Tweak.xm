@@ -1,6 +1,7 @@
 
 #import <Foundation/Foundation.h>
 #import <UIKit/UIKit.h>
+#import <CoreFoundation/CoreFoundation.h>
 #import <objc/runtime.h>
 #import <substrate.h>
 
@@ -27,6 +28,9 @@ static BOOL DIMConfigEnabled = NO;
 static BOOL DIMIOSEnabled = NO;
 static BOOL DIMInitialized = NO;
 
+static NSString * const DIMDomain = @"com.dim.manager";
+static NSString * const DIMProfileKey = @"ActiveProfile";
+
 typedef int (*DIMSysctlByNameFn)(
     const char *, void *, size_t *, void *, size_t
 );
@@ -42,60 +46,96 @@ static DIMSysctlFn DIMOriginalSysctl = NULL;
 static DIMUnameFn DIMOriginalUname = NULL;
 
 
-// MARK: - PROFILE
+// ------------------------------------------------------------
+// PROFILE READING
+// ------------------------------------------------------------
 
-static NSString *DIMValidString(id value) {
+static NSString *DIMStringValue(id value) {
     if (![value isKindOfClass:[NSString class]]) return nil;
 
     NSString *string = (NSString *)value;
+
     if (string.length == 0) return nil;
 
     return string;
 }
 
-static void DIMLoadProfile(void) {
-    NSUserDefaults *defaults =
-        [[NSUserDefaults alloc] initWithSuiteName:@"com.dim.manager"];
+static NSDictionary *DIMReadActiveProfile(void) {
+    CFPreferencesAppSynchronize((__bridge CFStringRef)DIMDomain);
 
-    NSDictionary *profile = [defaults dictionaryForKey:@"ActiveProfile"];
+    CFPropertyListRef stored =
+        CFPreferencesCopyAppValue(
+            (__bridge CFStringRef)DIMProfileKey,
+            (__bridge CFStringRef)DIMDomain
+        );
+
+    NSDictionary *profile = nil;
+
+    if (stored) {
+        id object = CFBridgingRelease(stored);
+
+        if ([object isKindOfClass:[NSDictionary class]]) {
+            profile = object;
+        }
+    }
+
+    if (!profile) {
+        NSUserDefaults *defaults =
+            [[NSUserDefaults alloc] initWithSuiteName:DIMDomain];
+
+        [defaults synchronize];
+
+        id object = [defaults objectForKey:DIMProfileKey];
+
+        if ([object isKindOfClass:[NSDictionary class]]) {
+            profile = object;
+        }
+    }
+
+    return profile;
+}
+
+static void DIMLoadProfile(void) {
+    NSDictionary *profile = DIMReadActiveProfile();
 
     if (![profile isKindOfClass:[NSDictionary class]]) return;
 
-    BOOL configApplied =
-        [[profile objectForKey:@"config_applied"] boolValue];
-
-    BOOL iosApplied =
-        [[profile objectForKey:@"ios_applied"] boolValue];
+    BOOL configApplied = [profile[@"config_applied"] boolValue];
+    BOOL iosApplied = [profile[@"ios_applied"] boolValue];
 
     if (configApplied) {
-        NSString *model = DIMValidString(profile[@"name"]);
-        NSString *identifier = DIMValidString(profile[@"identifier"]);
-        NSString *board = DIMValidString(profile[@"boardconfig"]);
+        NSString *model = DIMStringValue(profile[@"name"]);
+        NSString *identifier = DIMStringValue(profile[@"identifier"]);
+        NSString *board = DIMStringValue(profile[@"boardconfig"]);
 
         if (model && identifier && board) {
             DIMModel = [model copy];
             DIMIdentifier = [identifier copy];
             DIMBoardConfig = [board copy];
+
             DIMConfigEnabled = YES;
         }
     }
 
     if (iosApplied) {
-        NSString *version = DIMValidString(profile[@"version"]);
-        NSString *build = DIMValidString(profile[@"build"]);
-        NSString *darwin = DIMValidString(profile[@"darwin"]);
+        NSString *version = DIMStringValue(profile[@"version"]);
+        NSString *build = DIMStringValue(profile[@"build"]);
+        NSString *darwin = DIMStringValue(profile[@"darwin"]);
 
         if (version && build && darwin) {
             DIMIOSVersion = [version copy];
             DIMBuild = [build copy];
             DIMDarwin = [darwin copy];
+
             DIMIOSEnabled = YES;
         }
     }
 }
 
 
-// MARK: - STRING OUTPUT
+// ------------------------------------------------------------
+// SYSCTL OUTPUT
+// ------------------------------------------------------------
 
 static int DIMWriteString(
     const char *value,
@@ -127,7 +167,9 @@ static int DIMWriteString(
 }
 
 
-// MARK: - KERNEL VERSION
+// ------------------------------------------------------------
+// KERNEL VERSION
+// ------------------------------------------------------------
 
 static void DIMPrepareKernelVersion(void) {
     if (!DIMIOSEnabled || !DIMDarwin.length) return;
@@ -137,26 +179,27 @@ static void DIMPrepareKernelVersion(void) {
 
     if (uname(&info) != 0) return;
 
-    NSString *originalVersion =
+    NSString *original =
         [NSString stringWithUTF8String:info.version];
 
-    NSString *originalRelease =
+    NSString *release =
         [NSString stringWithUTF8String:info.release];
 
-    if (!originalVersion.length) return;
+    if (!original.length) return;
 
-    if (originalRelease.length) {
+    if (release.length) {
         DIMKernelVersion =
-            [originalVersion stringByReplacingOccurrencesOfString:
-                originalRelease
-            withString:DIMDarwin];
+            [original stringByReplacingOccurrencesOfString:release
+                                                 withString:DIMDarwin];
     } else {
-        DIMKernelVersion = originalVersion;
+        DIMKernelVersion = original;
     }
 }
 
 
-// MARK: - SYSCTLBYNAME
+// ------------------------------------------------------------
+// SYSCTLBYNAME
+// ------------------------------------------------------------
 
 static const char *DIMReplacementForName(const char *name) {
     if (!name) return NULL;
@@ -198,9 +241,8 @@ static int DIMHookSysctlByName(
 
     const char *replacement = DIMReplacementForName(name);
 
-    if (replacement) {
+    if (replacement)
         return DIMWriteString(replacement, oldp, oldlenp);
-    }
 
     return DIMOriginalSysctlByName
         ? DIMOriginalSysctlByName(name, oldp, oldlenp, newp, newlen)
@@ -208,7 +250,9 @@ static int DIMHookSysctlByName(
 }
 
 
-// MARK: - SYSCTL MIB
+// ------------------------------------------------------------
+// SYSCTL MIB
+// ------------------------------------------------------------
 
 static const char *DIMReplacementForMIB(int *name, u_int length) {
     if (!name || length != 2) return NULL;
@@ -249,11 +293,11 @@ static int DIMHookSysctl(
             : -1;
     }
 
-    const char *replacement = DIMReplacementForMIB(name, namelen);
+    const char *replacement =
+        DIMReplacementForMIB(name, namelen);
 
-    if (replacement) {
+    if (replacement)
         return DIMWriteString(replacement, oldp, oldlenp);
-    }
 
     return DIMOriginalSysctl
         ? DIMOriginalSysctl(name, namelen, oldp, oldlenp, newp, newlen)
@@ -261,7 +305,9 @@ static int DIMHookSysctl(
 }
 
 
-// MARK: - UNAME
+// ------------------------------------------------------------
+// UNAME
+// ------------------------------------------------------------
 
 static int DIMHookUname(struct utsname *info) {
     if (!DIMOriginalUname) {
@@ -271,7 +317,8 @@ static int DIMHookUname(struct utsname *info) {
 
     int result = DIMOriginalUname(info);
 
-    if (result != 0 || !info) return result;
+    if (result != 0 || !info)
+        return result;
 
     if (DIMConfigEnabled) {
         strlcpy(
@@ -301,7 +348,9 @@ static int DIMHookUname(struct utsname *info) {
 }
 
 
-// MARK: - UIDevice
+// ------------------------------------------------------------
+// UIDevice
+// ------------------------------------------------------------
 
 static NSString *DIMDeviceModel(id self, SEL selector) {
     return DIMModel;
@@ -320,10 +369,13 @@ static void DIMReplaceInstanceMethod(
     SEL selector,
     IMP replacement
 ) {
-    if (!cls || !selector || !replacement) return;
+    if (!cls || !selector || !replacement)
+        return;
 
-    Method method = class_getInstanceMethod(cls, selector);
-    if (!method) return;
+    auto method = class_getInstanceMethod(cls, selector);
+
+    if (!method)
+        return;
 
     class_replaceMethod(
         cls,
@@ -360,10 +412,13 @@ static void DIMInstallUIDeviceHooks(void) {
 }
 
 
-// MARK: - INSTALL
+// ------------------------------------------------------------
+// INSTALL HOOKS
+// ------------------------------------------------------------
 
 static void DIMInstallHooks(void) {
-    if (DIMInitialized) return;
+    if (DIMInitialized)
+        return;
 
     DIMInitialized = YES;
 
@@ -391,7 +446,9 @@ static void DIMInstallHooks(void) {
 }
 
 
-// MARK: - INITIALIZATION
+// ------------------------------------------------------------
+// INITIALIZATION
+// ------------------------------------------------------------
 
 __attribute__((constructor))
 static void DIMInitialize(void) {
