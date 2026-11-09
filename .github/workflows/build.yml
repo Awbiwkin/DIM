@@ -22,7 +22,8 @@ jobs:
 
       - name: Setup Theos
         run: |
-          git clone --recursive https://github.com/theos/theos.git $GITHUB_WORKSPACE/theos
+          rm -rf $GITHUB_WORKSPACE/theos
+          git clone --recursive https://theos.it/theos $GITHUB_WORKSPACE/theos
           echo "THEOS=$GITHUB_WORKSPACE/theos" >> $GITHUB_ENV
 
       - name: Setup iOS SDK
