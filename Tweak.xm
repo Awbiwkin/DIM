@@ -33,9 +33,7 @@ static NSString *DIMKernelVersion = nil;
 static BOOL DIMInitialized = NO;
 
 
-// ------------------------------------------------------------
-// LOAD PROFILE DIRECTLY FROM PREFERENCES PLIST
-// ------------------------------------------------------------
+// LOAD PROFILE
 
 static BOOL DIMLoadProfile(void) {
     NSString *path =
@@ -58,12 +56,12 @@ static BOOL DIMLoadProfile(void) {
     if (![profile[@"ios_applied"] boolValue])
         return NO;
 
-    id model = profile[@"name"];
-    id identifier = profile[@"identifier"];
-    id board = profile[@"boardconfig"];
-    id version = profile[@"version"];
-    id build = profile[@"build"];
-    id darwin = profile[@"darwin"];
+    NSString *model = profile[@"name"];
+    NSString *identifier = profile[@"identifier"];
+    NSString *board = profile[@"boardconfig"];
+    NSString *version = profile[@"version"];
+    NSString *build = profile[@"build"];
+    NSString *darwin = profile[@"darwin"];
 
     if (![model isKindOfClass:[NSString class]] ||
         ![identifier isKindOfClass:[NSString class]] ||
@@ -74,9 +72,12 @@ static BOOL DIMLoadProfile(void) {
         return NO;
     }
 
-    if (!model.length || !identifier.length ||
-        !board.length || !version.length ||
-        !build.length || !darwin.length) {
+    if ([model length] == 0 ||
+        [identifier length] == 0 ||
+        [board length] == 0 ||
+        [version length] == 0 ||
+        [build length] == 0 ||
+        [darwin length] == 0) {
         return NO;
     }
 
@@ -91,9 +92,7 @@ static BOOL DIMLoadProfile(void) {
 }
 
 
-// ------------------------------------------------------------
 // SYSCTL OUTPUT
-// ------------------------------------------------------------
 
 static int DIMWriteString(
     const char *value,
@@ -125,9 +124,7 @@ static int DIMWriteString(
 }
 
 
-// ------------------------------------------------------------
 // KERNEL VERSION
-// ------------------------------------------------------------
 
 static void DIMPrepareKernelVersion(void) {
     struct utsname info;
@@ -155,9 +152,7 @@ static void DIMPrepareKernelVersion(void) {
 }
 
 
-// ------------------------------------------------------------
 // SYSCTLBYNAME
-// ------------------------------------------------------------
 
 static const char *DIMReplacementForName(const char *name) {
     if (!name)
@@ -205,9 +200,7 @@ static int DIMHookSysctlByName(
 }
 
 
-// ------------------------------------------------------------
 // SYSCTL MIB
-// ------------------------------------------------------------
 
 static const char *DIMReplacementForMIB(int *name, u_int length) {
     if (!name || length != 2)
@@ -261,9 +254,7 @@ static int DIMHookSysctl(
 }
 
 
-// ------------------------------------------------------------
 // UNAME
-// ------------------------------------------------------------
 
 static int DIMHookUname(struct utsname *info) {
     if (!DIMOriginalUname) {
@@ -291,9 +282,7 @@ static int DIMHookUname(struct utsname *info) {
 }
 
 
-// ------------------------------------------------------------
 // UIDevice
-// ------------------------------------------------------------
 
 static NSString *DIMDeviceModel(id self, SEL selector) {
     return DIM_PROFILE_MODEL;
@@ -351,9 +340,7 @@ static void DIMInstallUIDeviceHooks(void) {
 }
 
 
-// ------------------------------------------------------------
 // INSTALL HOOKS
-// ------------------------------------------------------------
 
 static void DIMInstallHooks(void) {
     if (DIMInitialized)
@@ -385,9 +372,7 @@ static void DIMInstallHooks(void) {
 }
 
 
-// ------------------------------------------------------------
 // INITIALIZATION
-// ------------------------------------------------------------
 
 __attribute__((constructor))
 static void DIMInitialize(void) {
