@@ -1,3 +1,4 @@
+
 THEOS_PACKAGE_SCHEME = rootless
 
 ARCHS = arm64
@@ -17,11 +18,11 @@ include $(THEOS_MAKE_PATH)/tweak.mk
 
 BUNDLE_NAME = DIMPreferences
 
-DIMPreferences_FILES = DIMRootListController.m
+DIMPreferences_FILES = DIMRootListController.m DIMDeviceListController.m
 DIMPreferences_CFLAGS = -fobjc-arc
 DIMPreferences_FRAMEWORKS = UIKit
 DIMPreferences_PRIVATE_FRAMEWORKS = Preferences
 DIMPreferences_INSTALL_PATH = /Library/PreferenceBundles
-DIMPreferences_RESOURCE_FILES = Root.plist
+DIMPreferences_RESOURCE_FILES = Root.plist Device.plist
 
 include $(THEOS_MAKE_PATH)/bundle.mk
