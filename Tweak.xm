@@ -17,14 +17,8 @@
 static NSString * const DIMDomain = @"com.dim.manager";
 static NSString * const DIMTargetBundleID = @"ph.telegra.Telegraph";
 
-typedef int (*DIMSysctlByNameFn)(
-    const char *, void *, size_t *, void *, size_t
-);
-
-typedef int (*DIMSysctlFn)(
-    int *, u_int, void *, size_t *, void *, size_t
-);
-
+typedef int (*DIMSysctlByNameFn)(const char *, void *, size_t *, void *, size_t);
+typedef int (*DIMSysctlFn)(int *, u_int, void *, size_t *, void *, size_t);
 typedef int (*DIMUnameFn)(struct utsname *);
 
 static DIMSysctlByNameFn DIMOriginalSysctlByName = NULL;
@@ -40,25 +34,36 @@ static NSString *DIMDarwinVersion = nil;
 static NSString *DIMKernelVersion = nil;
 
 static BOOL DIMInitialized = NO;
+static NSUserDefaults *DIMDefaults = nil;
 
 // ============================================================
-// PREFERENCES
+// PREFERENCES — NSUserDefaults + CFPreferences FALLBACK
 // ============================================================
 
 static id DIMCopyPreference(NSString *key) {
-    if (!key) return nil;
+    if (!key.length)
+        return nil;
 
-    CFPropertyListRef value = CFPreferencesCopyAppValue(
+    if (!DIMDefaults)
+        DIMDefaults = [[NSUserDefaults alloc] initWithSuiteName:DIMDomain];
+
+    id value = [DIMDefaults objectForKey:key];
+
+    if (value)
+        return value;
+
+    CFPropertyListRef cfValue = CFPreferencesCopyAppValue(
         (__bridge CFStringRef)key,
         (__bridge CFStringRef)DIMDomain
     );
 
-    return value ? CFBridgingRelease(value) : nil;
+    if (cfValue)
+        return CFBridgingRelease(cfValue);
+
+    return nil;
 }
 
-static NSString *DIMStringPreference(NSString *key) {
-    id value = DIMCopyPreference(key);
-
+static NSString *DIMStringFromValue(id value) {
     if ([value isKindOfClass:[NSString class]])
         return value;
 
@@ -68,31 +73,96 @@ static NSString *DIMStringPreference(NSString *key) {
     return nil;
 }
 
+static NSString *DIMStringPreference(NSString *key) {
+    return DIMStringFromValue(DIMCopyPreference(key));
+}
+
 // ============================================================
 // CATALOG LOOKUP
 // ============================================================
 
 static NSDictionary *DIMFindCatalogDevice(NSString *identifier) {
-    if (!identifier.length) return nil;
+    if (!identifier.length)
+        return nil;
 
     id catalog = DIMCopyPreference(@"DIMCatalogDevices");
 
-    if (![catalog isKindOfClass:[NSArray class]])
+    if (![catalog isKindOfClass:[NSArray class]]) {
+        NSLog(@"[DIM] DIMCatalogDevices is not an array: %@",
+              NSStringFromClass([catalog class]));
         return nil;
+    }
 
     for (id item in (NSArray *)catalog) {
         if (![item isKindOfClass:[NSDictionary class]])
             continue;
 
-        NSString *itemIdentifier = item[@"identifier"];
+        NSDictionary *device = item;
 
-        if ([itemIdentifier isKindOfClass:[NSString class]] &&
-            [itemIdentifier isEqualToString:identifier]) {
-            return item;
-        }
+        NSString *itemIdentifier =
+            DIMStringFromValue(device[@"identifier"]);
+
+        if (!itemIdentifier.length)
+            itemIdentifier =
+                DIMStringFromValue(device[@"product_type"]);
+
+        if (!itemIdentifier.length)
+            itemIdentifier =
+                DIMStringFromValue(device[@"productType"]);
+
+        if ([itemIdentifier isEqualToString:identifier])
+            return device;
     }
 
+    NSLog(@"[DIM] Catalog has %lu devices; %@ not found",
+          (unsigned long)[(NSArray *)catalog count],
+          identifier);
+
     return nil;
+}
+
+// ============================================================
+// FIRMWARE COMPATIBILITY
+// ============================================================
+
+static void DIMLoadFirmwareFallback(
+    NSString **version,
+    NSString **build
+) {
+    if (version && (*version).length &&
+        build && (*build).length)
+        return;
+
+    id firmware = DIMCopyPreference(@"SelectedFirmware");
+
+    if ([firmware isKindOfClass:[NSDictionary class]]) {
+        NSDictionary *dict = firmware;
+
+        if (!(*version).length)
+            *version = DIMStringFromValue(dict[@"version"]);
+
+        if (!(*build).length)
+            *build = DIMStringFromValue(dict[@"build"]);
+
+        return;
+    }
+
+    NSString *firmwareString = DIMStringFromValue(firmware);
+
+    if (!firmwareString.length)
+        return;
+
+    NSArray *parts = [firmwareString componentsSeparatedByString:@"|"];
+
+    if (parts.count >= 2) {
+        if (!(*version).length)
+            *version = [parts[0] stringByTrimmingCharactersInSet:
+                        [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+
+        if (!(*build).length)
+            *build = [parts[1] stringByTrimmingCharactersInSet:
+                      [NSCharacterSet whitespaceAndNewlineCharacterSet]];
+    }
 }
 
 // ============================================================
@@ -100,7 +170,8 @@ static NSDictionary *DIMFindCatalogDevice(NSString *identifier) {
 // ============================================================
 
 static NSString *DIMDarwinForIOS(NSString *version) {
-    if (!version.length) return nil;
+    if (!version.length)
+        return nil;
 
     NSInteger major = [[[version componentsSeparatedByString:@"."]
         firstObject] integerValue];
@@ -126,6 +197,11 @@ static NSString *DIMDarwinForIOS(NSString *version) {
 // ============================================================
 
 static BOOL DIMLoadSelectedProfile(void) {
+    if (!DIMDefaults)
+        DIMDefaults = [[NSUserDefaults alloc] initWithSuiteName:DIMDomain];
+
+    [DIMDefaults synchronize];
+
     CFPreferencesAppSynchronize(
         (__bridge CFStringRef)DIMDomain
     );
@@ -139,30 +215,40 @@ static BOOL DIMLoadSelectedProfile(void) {
     NSString *build =
         DIMStringPreference(@"SelectedBuild");
 
+    DIMLoadFirmwareFallback(&version, &build);
+
+    NSLog(@"[DIM] Preferences domain: %@", DIMDomain);
+    NSLog(@"[DIM] SelectedModel: %@", identifier ?: @"(nil)");
+    NSLog(@"[DIM] SelectedVersion: %@", version ?: @"(nil)");
+    NSLog(@"[DIM] SelectedBuild: %@", build ?: @"(nil)");
+
     if (!identifier.length) {
-        NSLog(@"[DIM] No SelectedModel configured");
+        NSLog(@"[DIM] ERROR: SelectedModel is empty");
         return NO;
     }
 
-    NSDictionary *device =
-        DIMFindCatalogDevice(identifier);
+    NSDictionary *device = DIMFindCatalogDevice(identifier);
 
     if (!device) {
-        NSLog(@"[DIM] Device %@ not found in DIMCatalogDevices",
+        NSLog(@"[DIM] ERROR: device %@ missing from catalog",
               identifier);
         return NO;
     }
 
-    NSString *name = device[@"name"];
-    NSString *board = device[@"boardconfig"];
+    NSString *name =
+        DIMStringFromValue(device[@"name"]);
 
-    if (![name isKindOfClass:[NSString class]] ||
-        !name.length) {
+    NSString *board =
+        DIMStringFromValue(device[@"boardconfig"]);
+
+    if (!board.length)
+        board = DIMStringFromValue(device[@"board_config"]);
+
+    if (!board.length)
+        board = DIMStringFromValue(device[@"boardConfig"]);
+
+    if (!name.length)
         name = identifier;
-    }
-
-    if (![board isKindOfClass:[NSString class]])
-        board = @"";
 
     DIMDeviceIdentifier = [identifier copy];
     DIMDeviceProduct = [name copy];
@@ -173,15 +259,23 @@ static BOOL DIMLoadSelectedProfile(void) {
 
     DIMDarwinVersion = DIMDarwinForIOS(version);
 
-    NSLog(@"[DIM] Selected device: %@ (%@)",
+    NSLog(@"[DIM] Device loaded: %@ (%@)",
           DIMDeviceProduct, DIMDeviceIdentifier);
 
-    NSLog(@"[DIM] Selected firmware: %@ (%@)",
-          DIMSystemVersion, DIMBuildVersion);
+    NSLog(@"[DIM] Board: %@",
+          DIMDeviceBoard.length ? DIMDeviceBoard : @"(not available)");
+
+    NSLog(@"[DIM] Firmware loaded: %@ (%@)",
+          DIMSystemVersion ?: @"(nil)",
+          DIMBuildVersion ?: @"(nil)");
+
+    if (!DIMSystemVersion.length) {
+        NSLog(@"[DIM] WARNING: selected iOS version is empty");
+    }
 
     if (!DIMDarwinVersion.length) {
-        NSLog(@"[DIM] Darwin mapping unavailable for %@",
-              version);
+        NSLog(@"[DIM] WARNING: Darwin mapping unavailable for %@",
+              version ?: @"(nil)");
     }
 
     return YES;
@@ -254,7 +348,8 @@ static int DIMWriteString(
 // ============================================================
 
 static const char *DIMReplacementForName(const char *name) {
-    if (!name) return NULL;
+    if (!name)
+        return NULL;
 
     if (strcmp(name, "hw.machine") == 0)
         return DIMDeviceIdentifier.UTF8String;
@@ -283,22 +378,17 @@ static int DIMHookSysctlByName(
 ) {
     if (newp != NULL) {
         return DIMOriginalSysctlByName
-            ? DIMOriginalSysctlByName(
-                name, oldp, oldlenp, newp, newlen
-              )
+            ? DIMOriginalSysctlByName(name, oldp, oldlenp, newp, newlen)
             : -1;
     }
 
-    const char *replacement =
-        DIMReplacementForName(name);
+    const char *replacement = DIMReplacementForName(name);
 
     if (replacement && replacement[0])
         return DIMWriteString(replacement, oldp, oldlenp);
 
     return DIMOriginalSysctlByName
-        ? DIMOriginalSysctlByName(
-            name, oldp, oldlenp, newp, newlen
-          )
+        ? DIMOriginalSysctlByName(name, oldp, oldlenp, newp, newlen)
         : -1;
 }
 
@@ -345,22 +435,17 @@ static int DIMHookSysctl(
 ) {
     if (newp != NULL) {
         return DIMOriginalSysctl
-            ? DIMOriginalSysctl(
-                name, namelen, oldp, oldlenp, newp, newlen
-              )
+            ? DIMOriginalSysctl(name, namelen, oldp, oldlenp, newp, newlen)
             : -1;
     }
 
-    const char *replacement =
-        DIMReplacementForMIB(name, namelen);
+    const char *replacement = DIMReplacementForMIB(name, namelen);
 
     if (replacement && replacement[0])
         return DIMWriteString(replacement, oldp, oldlenp);
 
     return DIMOriginalSysctl
-        ? DIMOriginalSysctl(
-            name, namelen, oldp, oldlenp, newp, newlen
-          )
+        ? DIMOriginalSysctl(name, namelen, oldp, oldlenp, newp, newlen)
         : -1;
 }
 
@@ -446,23 +531,9 @@ static void DIMReplaceInstanceMethod(
 static void DIMInstallUIDeviceHooks(void) {
     Class cls = [UIDevice class];
 
-    DIMReplaceInstanceMethod(
-        cls,
-        @selector(model),
-        (IMP)DIMDeviceModel
-    );
-
-    DIMReplaceInstanceMethod(
-        cls,
-        @selector(localizedModel),
-        (IMP)DIMDeviceLocalizedModel
-    );
-
-    DIMReplaceInstanceMethod(
-        cls,
-        @selector(systemVersion),
-        (IMP)DIMDeviceSystemVersion
-    );
+    DIMReplaceInstanceMethod(cls, @selector(model), (IMP)DIMDeviceModel);
+    DIMReplaceInstanceMethod(cls, @selector(localizedModel), (IMP)DIMDeviceLocalizedModel);
+    DIMReplaceInstanceMethod(cls, @selector(systemVersion), (IMP)DIMDeviceSystemVersion);
 }
 
 // ============================================================
@@ -497,7 +568,8 @@ static void DIMInstallHooks(void) {
 
     DIMInstallUIDeviceHooks();
 
-    NSLog(@"[DIM] Runtime hooks installed");
+    NSLog(@"[DIM] Runtime hooks installed for %@",
+          DIMTargetBundleID);
 }
 
 // ============================================================
@@ -513,8 +585,10 @@ static void DIMInitialize(void) {
         if (![bundleID isEqualToString:DIMTargetBundleID])
             return;
 
+        NSLog(@"[DIM] Injected into Telegram");
+
         if (!DIMLoadSelectedProfile()) {
-            NSLog(@"[DIM] Profile loading failed");
+            NSLog(@"[DIM] Profile loading failed; hooks not installed");
             return;
         }
 
