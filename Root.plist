@@ -51,8 +51,6 @@
             <string>PSGroupCell</string>
             <key>label</key>
             <string>PROFILE ENGINE</string>
-            <key>footerText</key>
-            <string>Configure how DIM manages device profiles.</string>
         </dict>
 
         <dict>
@@ -79,6 +77,15 @@
             <false/>
             <key>defaults</key>
             <string>com.dim.manager</string>
+        </dict>
+
+        <dict>
+            <key>cell</key>
+            <string>PSLinkCell</string>
+            <key>label</key>
+            <string>Manage App Profiles</string>
+            <key>detail</key>
+            <string>DIMAppProfilesController</string>
         </dict>
 
         <dict>
