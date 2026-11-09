@@ -9,6 +9,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    env:
+      THEOS: ${{ github.workspace }}/theos
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -22,19 +24,18 @@ jobs:
 
       - name: Setup Theos
         run: |
-          rm -rf $GITHUB_WORKSPACE/theos
-          git clone --recursive https://github.com/theos/theos.git $GITHUB_WORKSPACE/theos
-          echo "THEOS=$GITHUB_WORKSPACE/theos" >> $GITHUB_ENV
+          rm -rf $THEOS
+          git clone --recursive https://github.com/theos/theos.git $THEOS
 
       - name: Setup iOS SDK
         run: |
-          if [ ! -d "$GITHUB_WORKSPACE/theos/sdks" ]; then
-            git clone https://github.com/theos/sdks.git $GITHUB_WORKSPACE/theos/sdks
+          if [ ! -d "$THEOS/sdks" ]; then
+            git clone https://github.com/theos/sdks.git $THEOS/sdks
           fi
 
       - name: Build Package
         run: |
-          make package FINALPACKAGE=1 THEOS=$GITHUB_WORKSPACE/theos
+          make package FINALPACKAGE=1
 
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
